@@ -1,0 +1,79 @@
+# The pick. Loaded into /pick. Lengths m, angles deg, times s.
+
+loop_hz: 20.0                            # state machine, path following and vehicle stepping
+joint_state_timeout_s: 0.5               # older joint readings count as missing
+
+task:
+  stream_timeout_s: 10.0                 # no camera frame this long fails the pick
+  spot_search_s: 60.0                    # keep surveying this long while nothing is in view
+  repark_search_s: 120.0                 # give up reparking after this long without the vehicle moving
+  retarget_attempts: 10                  # looks from one parking spot
+  park_attempts: 3                       # parking spots actually driven to
+  snapshot_match_m: 0.05                 # a pre-drive candidate this close to a fresh one is the same handle
+
+jaw:
+  settle_tolerance_m: 0.0001
+  settle_time_s: 1.0
+  grabbed_margin_m: 0.0005               # settled this far short of closed means something is held
+  timeout_s: 5.0
+
+cloud:
+  frames: 5                              # frames per look when either averaging is on, otherwise 1
+  frame_timeout_s: 30.0
+  voxel_m: 0.0025
+  crop_margin_m: 1.0                     # kept beyond the arm's reach, for what a park move could bring in
+  approach_column: 0                     # grasp pose rotation column along the approach
+  bar_column: 1                          # and along the bar
+  outlier_filter: true
+  handle_carving: true
+  corridor_carving: true
+  candidate_averaging: true
+  obstacle_averaging: true
+  flying_pixel: {depth_tolerance_m: 0.003, min_agreeing_neighbours: 5, slope_window_px: 5}
+  occupancy: {min_points_per_voxel: 2, free_space_tolerance_m: 0.005, max_surface_tilt_deg: 85.0}
+  handle_radius_m: 0.005                 # voxels this close to a grasp pose are handle, not obstacle
+  bar_gap_m: 0.015                       # consecutive poses closer than this lie on one bar
+  corridor: {length_m: 0.04, radius_m: 0.02}
+  consensus: {min_frames: 2, match_m: 0.010, max_axis_deg: 20.0, outlier_m: 0.006, max_spread_m: 0.003, duplicate_m: 0.005}
+  vote: {min_frames: 2, radius_voxels: 1}
+
+collision:
+  link_radius_m: 0.020
+  link_step_m: 0.002
+  blade_step_m: 0.0025
+  grasp_point_from_mount_m: 0.060        # 0.040 is the throat, 0.0969 the tips
+
+park:
+  box_xy_m: 1.0
+  box_z_m: 0.5
+  box_yaw_deg: 45.0
+  coarse_step_m: 0.100
+  coarse_step_deg: 9.0
+  fine_step_m: 0.025
+  fine_step_deg: 3.0
+  refine_count: 4                        # coarse cells refined around
+  standoff_m: [0.30, 0.40]               # a grasp only counts while the camera is this far from it
+  screen_count: 3000                     # most poses screened against the obstacle map
+  screen_budget_s: 10.0
+  screen_blade_stride: 20                # screening tests every nth blade sample; the winner is rechecked
+  exact_count: 10                        # best drivable poses rechecked at full fidelity
+  transit_samples: 16                    # points along the drive where the arm is checked
+  reach_cell_m: 0.002
+  speed_m_s: 0.05                        # the simulated vehicle
+  yaw_speed_deg_s: 10.0
+
+plan:
+  start_tolerance_deg: 1.5               # a start this far past a limit is snapped onto it
+  budget_s: 10.0
+  goal_budget_s: 0.5                     # per grasp posture
+  range_deg: 57.2958                     # longest RRTConnect extension
+  edge_step_deg: 1.0                     # collision check spacing along every edge
+  seed: 1
+
+follow:
+  max_step_deg: 1.25                     # per loop tick, so the speed limit is loop_hz times this
+  arrival_tolerance_deg: 1.5
+  arrival_timeout_s: 15.0
+  blocked_min_step_deg: 0.2              # only joints asked to move at least this far are watched
+  blocked_follow_fraction: 0.2           # moving less than this share of the command is a strike
+  blocked_strikes: 10

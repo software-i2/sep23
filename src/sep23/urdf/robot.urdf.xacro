@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<!-- Copyright by BeeX [2026] -->
+<robot name="alpha5" xmlns:xacro="http://ros.org/wiki/xacro">
+    <xacro:arg name="robot_yaml" default=""/>
+    <xacro:property name="robot" value="${xacro.load_yaml('$(arg robot_yaml)')}"/>
+    <xacro:property name="frames" value="${robot['frames']}"/>
+    <xacro:property name="camera" value="${robot['camera']}"/>
+    <xacro:property name="vehicle" value="${robot['vehicle']}"/>
+
+    <xacro:macro name="rpy" params="deg">${radians(deg[0])} ${radians(deg[1])} ${radians(deg[2])}</xacro:macro>
+
+    <link name="${frames['vehicle']}"/>
+    <link name="${frames['arm']}"/>
+    <joint name="arm_mount" type="fixed">
+        <parent link="${frames['vehicle']}"/>
+        <child link="${frames['arm']}"/>
+        <origin xyz="${' '.join(map(str, vehicle['arm_mount_xyz_m']))}"
+                rpy="${' '.join(str(radians(a)) for a in vehicle['arm_mount_rpy_deg'])}"/>
+    </joint>
+
+    <link name="camera_mount"/>
+    <joint name="camera_mount" type="fixed">
+        <parent link="${frames['vehicle']}"/>
+        <child link="camera_mount"/>
+        <origin xyz="${' '.join(map(str, camera['mount_xyz_m']))}"
+                rpy="${' '.join(str(radians(a)) for a in camera['mount_rpy_deg'])}"/>
+    </joint>
+    <link name="${camera['frame']}"/>
+    <joint name="camera_optical" type="fixed">
+        <parent link="camera_mount"/>
+        <child link="${camera['frame']}"/>
+        <origin xyz="0 0 0" rpy="${' '.join(str(radians(a)) for a in camera['optical_rpy_deg'])}"/>
+    </joint>
+
+    <xacro:include filename="$(find sep23)/urdf/alpha.urdf.xacro"/>
+    <xacro:alpha_urdf parent="${frames['arm']}" prefix="" description_package="sep23">
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+    </xacro:alpha_urdf>
+</robot>

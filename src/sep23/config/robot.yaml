@@ -1,0 +1,69 @@
+# Reach Alpha 5 on the vehicle. Loaded into /robot and read by the URDF. Lengths m, angles deg.
+
+frames: {world: world_locked, vehicle: vehicle_base, arm: arm_base}
+
+arm:
+  joint_names: {base: axis_e, shoulder: axis_d, elbow: axis_c, wrist: axis_b, jaw: axis_a}
+  limits_deg:                            # reported angles, inside the vendor URDF's
+    base: [0.0, 349.6]
+    shoulder: [0.0, 200.0]
+    elbow: [0.0, 184.5]
+    wrist: [0.0, 184.5]
+  home_deg: {base: 0.0, shoulder: 90.0, elbow: 0.0, wrist: 0.0}  # shoulder under ~80 hits the base housing
+  zero_offset_deg: {base: 2.403, shoulder: 0.0, elbow: 0.0, wrist: 0.0}  # model = sign * (reported - offset)
+  direction_sign: {base: 1, shoulder: 1, elbow: 1, wrist: -1}
+
+jaws:
+  limits_m: [0.0013, 0.0133]             # fully closed, fully open
+  open_m: 0.007                          # opening while moving; the collision body uses it too
+  mount_to_throat_m: 0.0300
+  mount_to_tip_m: 0.0969
+  palm_length_m: 0.00975
+  hinge_roll_at_wrist_zero_deg: -60.0
+  blade_rotation_rad_per_m: 51.0         # each blade swings this far per metre of opening
+  hinge_offset_closing_m: 0.0155
+  hinge_offset_approach_m: 0.0069
+  blade_profile_m:                       # per 5 mm band: approach min, max, closing min, max, hinge half width
+    - [-0.0050, 0.0000, -0.0252, 0.0051, 0.0057]
+    - [0.0000, 0.0050, -0.0252, 0.0058, 0.0057]
+    - [0.0050, 0.0100, -0.0202, 0.0063, 0.0057]
+    - [0.0100, 0.0150, -0.0165, 0.0066, 0.0057]
+    - [0.0150, 0.0200, -0.0153, 0.0067, 0.0049]
+    - [0.0200, 0.0250, -0.0144, 0.0067, 0.0049]
+    - [0.0250, 0.0300, -0.0138, 0.0065, 0.0049]
+    - [0.0300, 0.0350, -0.0137, 0.0060, 0.0049]
+    - [0.0350, 0.0400, -0.0139, 0.0052, 0.0049]
+    - [0.0400, 0.0450, -0.0145, 0.0043, 0.0049]
+    - [0.0450, 0.0500, -0.0156, 0.0030, 0.0049]
+    - [0.0500, 0.0550, -0.0168, 0.0015, 0.0049]
+    - [0.0550, 0.0600, -0.0184, -0.0003, 0.0049]
+    - [0.0600, 0.0650, -0.0202, -0.0024, 0.0049]
+    - [0.0650, 0.0700, -0.0211, -0.0048, 0.0049]
+    - [0.0700, 0.0750, -0.0211, -0.0076, 0.0049]
+    - [0.0750, 0.0800, -0.0211, -0.0107, 0.0049]
+    - [0.0800, 0.0852, -0.0211, -0.0143, 0.0049]
+
+camera:
+  frame: camera_link
+  mount_xyz_m: [0.35, -0.05, -0.05]      # camera_mount in the vehicle frame
+  mount_rpy_deg: [0.0, 0.0, 0.0]
+  optical_rpy_deg: [90.0, 0.0, -90.0]    # camera_link in camera_mount: x right, y up, looking down -z
+  intrinsics: {width_px: 800, height_px: 600, fx_px: 479.2662, fy_px: 479.2662, cx_px: 397.9827, cy_px: 322.8405}
+
+vehicle:
+  arm_mount_xyz_m: [0.35, 0.0, -0.05]    # UNMEASURED: arm_base in the vehicle frame
+  arm_mount_rpy_deg: [180.0, 0.0, 0.0]   # the arm hangs inverted, so arm_base +z points down
+  hull_footprint_m: {min_x: -0.80, max_x: 0.10, min_y: -0.40, max_y: 0.40}  # in arm_base
+  hull_floor_z_m: -1.0e-6                # inside the footprint the hull is everything below this z in arm_base
+
+driver:
+  serial_port: /dev/ttyUSB0
+  baud_rate: 115200
+  device_ids: {jaw: 1, wrist: 2, elbow: 3, shoulder: 4, base: 5}
+  poll_hz: 10.0
+  reply_timeout_s: 0.05
+  connect_attempts: 5
+  connect_retry_s: 2.0
+  wake_speed_deg_s: 0.573                # tiny wrist speed that wakes the arm
+  joint_speed_deg_s: 28.6479             # home ramp, and the simulated arm
+  jaw_speed_m_s: 0.010

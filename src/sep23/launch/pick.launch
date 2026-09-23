@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<!-- Copyright by BeeX [2026] -->
+<launch>
+    <arg name="sim" default="false" doc="simulated arm instead of the serial port"/>
+    <arg name="bag" default="" doc="bag replayed in a loop instead of the live camera, e.g. $(find sep23)/../../data/x.bag"/>
+    <arg name="bag_rate" default="1.0" doc="10 suits captures_grasp_poses.bag, recorded a frame every 5 to 10 s"/>
+    <arg name="vision" default="false" doc="run axis_grasp and take its grasp poses"/>
+    <arg name="foxglove" default="true"/>
+    <arg name="config" default="$(find sep23)/config"/>
+
+    <rosparam command="load" ns="robot" file="$(arg config)/robot.yaml"/>
+    <param name="robot_description" command="$(find xacro)/xacro $(find sep23)/urdf/robot.urdf.xacro robot_yaml:=$(arg config)/robot.yaml"/>
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"/>
+
+    <node name="driver" pkg="sep23" type="driver" output="screen" required="true">
+        <param name="simulated" value="$(arg sim)"/>
+    </node>
+
+    <node name="pick" pkg="sep23" type="pick" output="screen">
+        <rosparam command="load" file="$(arg config)/pick.yaml"/>
+        <param name="camera_fixed_in_world" value="$(eval bag != '')"/>
+        <remap from="cloud" to="/pointcloud"/>
+        <remap from="grasp_poses" to="$(eval '/grasp_poses_by_pipeline' if vision else '/grasp_poses')"/>
+    </node>
+
+    <include if="$(arg vision)" file="$(find axis_grasp)/launch/axis_grasp.launch"/>
+
+    <arg name="bag_topics" value="$(eval '--topics /disparity /image /pointcloud' if vision else '')"/>
+    <node if="$(eval bag != '')" name="bag" pkg="rosbag" type="play" args="--loop --quiet --rate=$(arg bag_rate) $(arg bag) $(arg bag_topics)"/>
+
+    <node if="$(arg foxglove)" name="foxglove" pkg="foxglove_bridge" type="foxglove_bridge">
+        <param name="port" value="8765"/>
+        <param name="send_buffer_limit" value="100000000"/>
+    </node>
+</launch>
