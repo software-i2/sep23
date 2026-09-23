@@ -263,8 +263,8 @@ ParkChoice ParkSearch::choose(const std::vector<GraspPose> &grasps, const Obstac
     if (stay.held > 0 && (stay.routes > best.routes || (stay.routes == best.routes && stay.held >= best.held))) {
         best = {ParkDecision::STAY, VehiclePose(), stay.held, stay.routes, ""};
     }
-    // Arriving somewhere unworkable cannot be undone, so a move needs at least one straight route.
-    if (best.decision == ParkDecision::MOVE && best.routes == 0) {
+    // A move without a straight route is only refused when staying still reaches something.
+    if (best.decision == ParkDecision::MOVE && best.routes == 0 && stay.held > 0) {
         best = {ParkDecision::STAY, VehiclePose(), stay.held, stay.routes, ""};
     }
 
