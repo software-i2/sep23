@@ -5,3 +5,4 @@ install/
 .catkin_tools/
 data/*
 !data/.gitkeep
+graphify-out/
