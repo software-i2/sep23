@@ -174,6 +174,20 @@ TEST(Arm, InverseKinematicsRecoversEveryFrontFacingPosture) {
     EXPECT_GT(front, 200);
 }
 
+TEST(Arm, TellsWhatLiesBetweenTheOpenBlades) {
+    ArmConfig c           = testArm(expandedUrdf());
+    c.jaw.mount_to_throat = 0.03;
+    const Arm             arm(c, 0.005);
+    const Joints          q{{0.3, 1.2, 0.8, -0.5}};
+    const JawAxes         a     = arm.axes(q);
+    const Eigen::Vector3d grasp = arm.points(q).mount + 0.06 * a.approach;
+    EXPECT_TRUE(arm.betweenBlades(arm.inJaw(q, grasp)));
+    EXPECT_TRUE(arm.betweenBlades(arm.inJaw(q, grasp + 0.004 * a.hinge + 0.003 * a.closing)));
+    EXPECT_FALSE(arm.betweenBlades(arm.inJaw(q, grasp + 0.005 * a.closing))) << "outside the 7 mm opening";
+    EXPECT_FALSE(arm.betweenBlades(arm.inJaw(q, grasp + 0.006 * a.hinge))) << "beside the blades";
+    EXPECT_FALSE(arm.betweenBlades(arm.inJaw(q, grasp + 0.04 * a.approach))) << "past the tips";
+}
+
 TEST(Collision, InflatesObstaclesAndKeepsHandleExact) {
     ObstacleMap map;
     map.box.voxel  = 0.01;
@@ -299,6 +313,12 @@ TEST(Cloud, ConsensusKeepsWhatFramesAgreeOn) {
         EXPECT_NEAR(g.point.z(), 0.3, 1e-9);
     }
     EXPECT_TRUE(agreeOnSpots({frames[0]}, s, summary).empty()) << "one frame cannot agree with itself";
+}
+
+TEST(Cloud, HandleJoinsOnlyCloseNeighbours) {
+    const std::vector<Eigen::Vector3d> bar = {{0.0, 0.0, 0.0}, {0.01, 0.0, 0.0}, {0.05, 0.0, 0.0}};
+    EXPECT_LT((nearestOnHandle(bar, 0.015, {0.004, 0.002, 0.0}) - Eigen::Vector3d(0.004, 0.0, 0.0)).norm(), 1e-12);
+    EXPECT_LT((nearestOnHandle(bar, 0.015, {0.025, 0.002, 0.0}) - Eigen::Vector3d(0.01, 0.0, 0.0)).norm(), 1e-12) << "0.01 to 0.05 is a gap";
 }
 
 // A tilted wall with scattered missing pixels and one pixel floating in front of it: the filter keeps the wall, drops the spike.

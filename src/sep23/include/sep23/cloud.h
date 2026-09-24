@@ -75,4 +75,7 @@ Scene processFrames(const std::vector<Frame> &frames, const CameraModel &camera,
 std::vector<GraspPose> agreeOnSpots(const std::vector<std::vector<GraspPose>> &frames, const CloudSettings &s,
                                     std::string &summary);
 
+// The point nearest `p` on the handle the pose points draw: consecutive points within `bar_gap` join into one bar. Not empty.
+Eigen::Vector3d nearestOnHandle(const std::vector<Eigen::Vector3d> &points, double bar_gap, const Eigen::Vector3d &p);
+
 }  // namespace sep23

@@ -273,4 +273,20 @@ bool Arm::rollsAcrossBar(const Joints &q, const Eigen::Vector3d &bar, double rol
     return true;
 }
 
+Eigen::Vector3d Arm::inJaw(const Joints &q, const Eigen::Vector3d &p) const {
+    const JawAxes         a = axes(q);
+    const Eigen::Vector3d d = p - points(q).mount;
+    return {a.approach.dot(d), a.hinge.dot(d), a.closing.dot(d)};
+}
+
+bool Arm::betweenBlades(const Eigen::Vector3d &j) const {
+    const JawShape &jaw   = config_.jaw;
+    double          width = 0.0;
+    for (const BladeBand &b : jaw.blades) {
+        width = std::max(width, b.hinge_half_width);
+    }
+    return j.x() >= jaw.mount_to_throat && j.x() <= jaw.mount_to_tip && std::fabs(j.y()) <= width
+           && std::fabs(j.z()) <= 0.5 * jaw.open_width;
+}
+
 }  // namespace sep23

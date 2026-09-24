@@ -350,8 +350,7 @@ public:
                 ROS_WARN("[pick] start ignored: already in %s", stateName(state_));
             } else {
                 park_attempt_ = look_attempt_ = 0;
-                grabbed_                      = false;
-                have_snapshot_                = false;
+                grabbed_ = on_handle_ = have_snapshot_ = false;
                 surveying_since_ = reparking_since_ = ros::Time();
                 run_started_                        = ros::Time::now();
                 map_pub_.publish(mapCloud(ObstacleMap(), Eigen::Isometry3d::Identity(), c_.world_frame));
@@ -557,6 +556,10 @@ private:
         char         line[200];
         switch (next) {
         case State::GOTOGRASP: {
+            {
+                std::lock_guard<std::mutex> lock(sensor_mutex_);
+                frames_.clear();  // what arrives during the motion is what handleCheck() judges the end against
+            }
             // Stage 3 follows the chosen candidate from where the grasp look saw it.
             if (!c_.track_enabled) {
                 break;
@@ -869,7 +872,7 @@ private:
         }
         switch (state) {
         case Following::REACHED: {
-            message = "reached the end of the path";
+            message = "reached the end of the path" + handleCheck(arm_.toModel(reported));
             if (c_.track_enabled) {
                 std::lock_guard<std::mutex> lock(track_mutex_);
                 char                        line[120];
@@ -927,6 +930,34 @@ private:
         return Event::NONE;
     }
 
+    // Pass or fail for the blind motion: whether the jaw ended with the handle between its open blades, the handle drawn
+    // from the newest grasp poses seen during the motion. A replayed bag's poses are unoccluded, so they show where the
+    // handle really went; a live camera's are not trustworthy with the arm in view.
+    std::string handleCheck(const Joints &q) {
+        on_handle_ = false;
+        std::vector<Eigen::Vector3d> handle;
+        {
+            std::lock_guard<std::mutex> lock(sensor_mutex_);
+            if (frames_.empty()) {
+                return "; no grasp poses during the motion to check the jaw against";
+            }
+            for (const GraspPose &g : frames_.back().poses) {
+                handle.push_back(frames_.back().camera_to_arm * g.point);
+            }
+        }
+        const double          along   = c_.plan.grasp_point_from_mount;
+        const Eigen::Vector3d grasp   = arm_.points(q).mount + arm_.axes(q).approach * along;
+        const Eigen::Vector3d planned = scene_.candidates[plan_.candidate].point;
+        const Eigen::Vector3d j       = arm_.inJaw(q, nearestOnHandle(handle, c_.cloud.bar_gap, grasp));
+        on_handle_                    = arm_.betweenBlades(j);
+        char line[200];
+        std::snprintf(line, sizeof(line),
+                      "; %s: it sits %+.1f %+.1f %+.1f mm from the grasp point (approach, hinge, closing); the planned target is %.1f mm off it",
+                      on_handle_ ? "ON THE HANDLE" : "MISSED THE HANDLE", 1000 * (j.x() - along), 1000 * j.y(), 1000 * j.z(),
+                      1000 * (nearestOnHandle(handle, c_.cloud.bar_gap, planned) - planned).norm());
+        return line;
+    }
+
     // How far the pre-drive snapshot turned out to be wrong: dead reckoning plus whatever the scene did.
     std::string comparedWithSnapshot() {
         if (!have_snapshot_ || snapshot_.candidates.empty() || scene_.candidates.empty()) {
@@ -966,6 +997,7 @@ private:
         msg.message      = message;
         msg.park_attempt = park_attempt_;
         msg.grabbed      = grabbed_;
+        msg.on_handle    = on_handle_;
         state_pub_.publish(msg);
         char timing[80] = "";
         if (spent >= 0.0) {
@@ -1090,7 +1122,7 @@ private:
 
     std::atomic<bool> start_requested_{false}, stop_requested_{false}, working_{false};
     State             state_ = State::READY;
-    bool              spot_phase_ = true, grabbed_ = false, have_snapshot_ = false;
+    bool              spot_phase_ = true, grabbed_ = false, on_handle_ = false, have_snapshot_ = false;
     uint32_t          park_attempt_ = 0, look_attempt_ = 0;
     long              ticks_ = 0;
     ros::Time         entered_ = ros::Time::now(), run_started_, surveying_since_, reparking_since_, last_stamp_;

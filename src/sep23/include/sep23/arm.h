@@ -116,6 +116,10 @@ public:
     bool fitIntoLimits(int joint, double angle, double seed, double &out) const;
     // The two wrist rolls that close the blades across `bar`; false when the bar lies along the approach.
     bool rollsAcrossBar(const Joints &q, const Eigen::Vector3d &bar, double rolls[2]) const;
+    // `p` in the jaw at q: along the approach from the mount, along the hinge, along the closing line.
+    Eigen::Vector3d inJaw(const Joints &q, const Eigen::Vector3d &p) const;
+    // Whether a point in jaw coordinates lies between the open blades: past the throat, short of the tips, within a blade's width.
+    bool betweenBlades(const Eigen::Vector3d &j) const;
 
 private:
     double upperLength() const { return std::hypot(config_.geometry.upper_x, config_.geometry.upper_z); }

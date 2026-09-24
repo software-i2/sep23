@@ -11,7 +11,7 @@ reset() {
     sleep 1
 }
 
-started=$SECONDS attempts=0 success=0 grabbed=0 failed=0 timed_out=0
+started=$SECONDS attempts=0 success=0 grabbed=0 on_handle=0 failed=0 timed_out=0
 while [ $((SECONDS - started)) -lt "$DURATION" ]; do
     reset
     attempts=$((attempts + 1))
@@ -23,11 +23,15 @@ while [ $((SECONDS - started)) -lt "$DURATION" ]; do
         sleep 1
     done
     case "$state" in
-    SUCCESS) success=$((success + 1)); [ "$(field /pick/state/grabbed)" = True ] && grabbed=$((grabbed + 1)) ;;
+    SUCCESS)
+        success=$((success + 1))
+        [ "$(field /pick/state/grabbed)" = True ] && grabbed=$((grabbed + 1))
+        [ "$(field /pick/state/on_handle)" = True ] && on_handle=$((on_handle + 1)) && state="$state on the handle"
+        ;;
     FAIL | ESTOP) failed=$((failed + 1)) ;;
     *) timed_out=$((timed_out + 1)); rosservice call /pick/stop >/dev/null 2>&1; state="timed out in ${state:-?}" ;;
     esac
     echo "[*] attempt $attempts: $state in $((SECONDS - begin)) s"
 done
 rosservice call /pick/stop >/dev/null 2>&1
-echo "over $((SECONDS - started)) s: $attempts attempts, $success SUCCESS ($grabbed with a grip), $failed failed, $timed_out timed out"
+echo "over $((SECONDS - started)) s: $attempts attempts, $success SUCCESS ($grabbed with a grip, $on_handle on the handle), $failed failed, $timed_out timed out"
