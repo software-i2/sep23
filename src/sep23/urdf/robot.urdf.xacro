@@ -8,8 +8,6 @@
     <xacro:property name="camera" value="${robot['camera']}"/>
     <xacro:property name="vehicle" value="${robot['vehicle']}"/>
 
-    <xacro:macro name="rpy" params="deg">${radians(deg[0])} ${radians(deg[1])} ${radians(deg[2])}</xacro:macro>
-
     <link name="${frames['vehicle']}"/>
     <link name="${frames['arm']}"/>
     <joint name="arm_mount" type="fixed">

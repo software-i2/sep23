@@ -301,6 +301,44 @@ TEST(Cloud, ConsensusKeepsWhatFramesAgreeOn) {
     EXPECT_TRUE(agreeOnSpots({frames[0]}, s, summary).empty()) << "one frame cannot agree with itself";
 }
 
+// A tilted wall with scattered missing pixels and one pixel floating in front of it: the filter keeps the wall, drops the spike.
+TEST(Cloud, FlyingPixelFilterKeepsASurfaceWithHoles) {
+    const CameraModel camera{80, 60, 100.0, 100.0, 40.0, 30.0};
+    CloudSettings     s;
+    s.voxel                   = 0.0025;
+    s.crop_radius             = 1.0;
+    s.depth_tolerance         = 0.003;
+    s.min_agreeing_neighbours = 5;
+    s.slope_window_px         = 5;
+    s.min_points_per_voxel    = 1;
+    s.free_space_tolerance    = 0.005;
+    s.max_ray_stretch         = 10.0;
+    s.handle_carving = s.corridor_carving = s.candidate_averaging = s.obstacle_averaging = false;
+
+    Frame        f;
+    std::mt19937 rng(5);
+    for (int v = 0; v < camera.height; ++v) {
+        for (int u = 0; u < camera.width; ++u) {
+            const double depth = u == 40 && v == 30 ? 0.35 : 0.40 + 0.0005 * u;
+            const bool   hole  = std::uniform_real_distribution<double>(0.0, 1.0)(rng) < 0.05;
+            f.points.push_back(hole ? Eigen::Vector3f::Constant(NAN)
+                                    : Eigen::Vector3f(static_cast<float>((u - camera.cx) * depth / camera.fx),
+                                                      static_cast<float>(-(v - camera.cy) * depth / camera.fy), static_cast<float>(-depth)));
+        }
+    }
+    const Eigen::Vector3d spike = f.points[30 * camera.width + 40].cast<double>();
+    ASSERT_TRUE(spike.allFinite());
+    const auto obstacles = [&](bool filter) {
+        s.outlier_filter = filter;
+        return processFrames({f}, camera, s).map;
+    };
+    const ObstacleMap all = obstacles(false), kept = obstacles(true);
+    const uint32_t    spike_cell = static_cast<uint32_t>(all.box.cellOf(spike));
+    EXPECT_TRUE(std::binary_search(all.obstacle.begin(), all.obstacle.end(), spike_cell));
+    EXPECT_FALSE(std::binary_search(kept.obstacle.begin(), kept.obstacle.end(), spike_cell)) << "the spike passed the filter";
+    EXPECT_GT(kept.obstacle.size(), 0.95 * all.obstacle.size()) << "holes cost the wall around them";
+}
+
 int main(int argc, char **argv) {
     testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

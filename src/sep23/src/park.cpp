@@ -78,13 +78,20 @@ Eigen::Isometry3d ParkSearch::armMove(const VehiclePose &move) const {
     return vehicle_to_arm_ * toIsometry(move) * vehicle_to_arm_.inverse();
 }
 
+Eigen::Vector3d ParkSearch::cameraAfter(const VehiclePose &move) const { return vehicle_to_arm_ * toIsometry(move) * camera_in_vehicle_; }
+
+// A grasp only counts while the camera stands where it sees the handle well.
+bool ParkSearch::inStandoff(const Eigen::Vector3d &point, const Eigen::Vector3d &camera) const {
+    const double standoff = (point - camera).norm();
+    return standoff >= s_.standoff_min && standoff <= s_.standoff_max;
+}
+
 int ParkSearch::admitted(const std::vector<GraspPose> &grasps, const VehiclePose &move) const {
     const Eigen::Isometry3d to_moved = armMove(move).inverse();
-    const Eigen::Vector3d   camera   = vehicle_to_arm_ * toIsometry(move) * camera_in_vehicle_;
+    const Eigen::Vector3d   camera   = cameraAfter(move);
     int                     count    = 0;
     for (const GraspPose &g : grasps) {
-        const double standoff = (g.point - camera).norm();
-        if (standoff < s_.standoff_min || standoff > s_.standoff_max) {
+        if (!inStandoff(g.point, camera)) {
             continue;
         }
         const Eigen::Vector3d p = to_moved * g.point;
@@ -175,11 +182,15 @@ void ParkSearch::shortlist(const std::vector<GraspPose> &grasps, std::vector<Sco
 ParkSearch::Holds ParkSearch::verify(const std::vector<GraspPose> &grasps, const VehiclePose &move, ObstacleGrid &grid,
                                        const Joints &home, size_t stride) const {
     const Eigen::Isometry3d to_moved = armMove(move).inverse();
+    const Eigen::Vector3d   camera   = cameraAfter(move);
     grid.setQueryToMap(armMove(move));
     Collision collision(arm_, grid, hull_, s_.link_step, stride);
     const double along = arm_.mountDistance() + s_.grasp_point_from_mount;
     Holds        out;
     for (size_t i = 0; i < grasps.size(); ++i) {
+        if (!inStandoff(grasps[i].point, camera)) {
+            continue;
+        }
         const GraspPose        moved{to_moved * grasps[i].point, to_moved.linear() * grasps[i].bar, Eigen::Vector3d::Zero()};
         std::vector<GraspGoal> goals;
         graspGoals(moved, i, home, along, collision, goals);

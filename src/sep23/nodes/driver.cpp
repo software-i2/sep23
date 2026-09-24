@@ -103,8 +103,12 @@ private:
     // Every target in the message is checked before any is sent.
     void onTargets(const sensor_msgs::JointState::ConstPtr &msg) {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::vector<int>            index;
-        for (size_t i = 0; i < msg->name.size() && msg->name.size() == msg->position.size(); ++i) {
+        if (msg->name.size() != msg->position.size()) {
+            ROS_WARN("[driver] joint targets dropped: %zu names for %zu positions", msg->name.size(), msg->position.size());
+            return;
+        }
+        std::vector<int> index;
+        for (size_t i = 0; i < msg->name.size(); ++i) {
             const auto found = std::find_if(axes_.begin(), axes_.end(), [&](const Axis &a) { return a.name == msg->name[i]; });
             if (found == axes_.end() || !(msg->position[i] >= found->min && msg->position[i] <= found->max)) {
                 ROS_WARN("[driver] joint targets dropped: %s is unknown or outside its limits", msg->name[i].c_str());

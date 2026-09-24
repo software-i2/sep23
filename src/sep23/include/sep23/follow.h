@@ -24,7 +24,6 @@ public:
     void load(const std::vector<Joints> &corners);
     // A new joint reading; only readings not yet judged may decide whether a joint keeps up.
     void measure(const Joints &q);
-    void loseMeasurement();
     Following tick(double now_s, Joints &target, bool &send);
 
     int    blockedJoint() const { return blocked_joint_; }

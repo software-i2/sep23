@@ -76,6 +76,8 @@ private:
     void    shortlist(const std::vector<GraspPose> &grasps, std::vector<Scored> &out) const;
     Holds   verify(const std::vector<GraspPose> &grasps, const VehiclePose &move, ObstacleGrid &grid, const Joints &home,
                    size_t stride) const;
+    Eigen::Vector3d cameraAfter(const VehiclePose &move) const;  // in the arm frame now
+    bool    inStandoff(const Eigen::Vector3d &point, const Eigen::Vector3d &camera) const;
     bool    transitClear(const VehiclePose &to, ObstacleGrid &grid, const Joints &home) const;
     Eigen::Isometry3d armMove(const VehiclePose &move) const;  // the arm frame after the move, in the arm frame now
 

@@ -2,6 +2,7 @@
 #include <sep23/cloud.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -54,39 +55,44 @@ private:
 // Pixels whose neighbours lie on the same local plane; the rest are flying pixels.
 std::vector<uint8_t> supportedPixels(const DepthView &depth, const CameraModel &c, const CloudSettings &s) {
     const int W = c.width, H = c.height;
-    // Summed-area tables of count, depth, depth*u and depth*v, one row and column larger than the image.
-    std::vector<double> n((W + 1) * (H + 1), 0.0), d(n), du(n), dv(n);
-    const auto          at = [&](int u, int v) { return static_cast<size_t>(v) * (W + 1) + u; };
+    // Summed-area tables over seen pixels, one row and column larger than the image.
+    enum { N, U, V, UU, VV, UV, D, DU, DV, SUMS };
+    using Sums = std::array<double, SUMS>;
+    std::vector<Sums> t(static_cast<size_t>(W + 1) * (H + 1), Sums{});
+    const auto        at = [&](int u, int v) { return static_cast<size_t>(v) * (W + 1) + u; };
     for (int v = 0; v < H; ++v) {
         for (int u = 0; u < W; ++u) {
-            const bool   seen = depth.seen(u, v);
-            const double z    = seen ? depth.at(u, v) : 0.0;
-            const size_t i    = at(u + 1, v + 1);
+            const double z  = depth.seen(u, v) ? depth.at(u, v) : 0.0;
+            const Sums   px = z > 0.0 ? Sums{1.0, 1.0 * u, 1.0 * v, 1.0 * u * u, 1.0 * v * v, 1.0 * u * v, z, z * u, z * v} : Sums{};
+            const size_t i  = at(u + 1, v + 1);
             const size_t l = i - 1, up = i - (W + 1), ul = up - 1;
-            n[i]  = (seen ? 1.0 : 0.0) + n[l] + n[up] - n[ul];
-            d[i]  = z + d[l] + d[up] - d[ul];
-            du[i] = z * u + du[l] + du[up] - du[ul];
-            dv[i] = z * v + dv[l] + dv[up] - dv[ul];
+            for (int k = 0; k < SUMS; ++k) {
+                t[i][k] = px[k] + t[l][k] + t[up][k] - t[ul][k];
+            }
         }
     }
-    const auto over = [&](const std::vector<double> &t, int u0, int v0, int u1, int v1) {
-        return t[at(u1 + 1, v1 + 1)] - t[at(u1 + 1, v0)] - t[at(u0, v1 + 1)] + t[at(u0, v0)];
-    };
 
-    const int            half   = s.slope_window_px / 2;
-    const double         spread = (s.slope_window_px * s.slope_window_px - 1) / 12.0;
+    const int            half = s.slope_window_px / 2;
     std::vector<uint8_t> out(static_cast<size_t>(W) * H, 0);
     for (int v = 0; v < H; ++v) {
         for (int u = 0; u < W; ++u) {
             if (!depth.seen(u, v)) {
                 continue;
             }
-            const int    u0 = std::max(0, u - half), v0 = std::max(0, v - half);
-            const int    u1 = std::min(W - 1, u + half), v1 = std::min(H - 1, v + half);
-            const double count   = over(n, u0, v0, u1, v1);
-            const double mean    = over(d, u0, v0, u1, v1) / count;
-            const double slope_u = (over(du, u0, v0, u1, v1) / count - u * mean) / spread;
-            const double slope_v = (over(dv, u0, v0, u1, v1) / count - v * mean) / spread;
+            const int u0 = std::max(0, u - half), v0 = std::max(0, v - half);
+            const int u1 = std::min(W - 1, u + half), v1 = std::min(H - 1, v + half);
+            Sums      w;
+            for (int k = 0; k < SUMS; ++k) {
+                w[k] = t[at(u1 + 1, v1 + 1)][k] - t[at(u1 + 1, v0)][k] - t[at(u0, v1 + 1)][k] + t[at(u0, v0)][k];
+            }
+            // A least-squares plane over the seen pixels, about their own centroid: holes and the image edge move it off (u, v).
+            const double mu = w[U] / w[N], mv = w[V] / w[N];
+            const double uu = w[UU] - w[U] * mu, vv = w[VV] - w[V] * mv, uv = w[UV] - w[U] * mv;
+            const double zu = w[DU] - w[D] * mu, zv = w[DV] - w[D] * mv;
+            const double det      = uu * vv - uv * uv;  // at least 1/count unless the seen pixels lie on one line
+            const bool   planar   = det > 1e-2;
+            const double slope_u  = planar ? (zu * vv - zv * uv) / det : 0.0;
+            const double slope_v  = planar ? (zv * uu - zu * uv) / det : 0.0;
             int          agreeing = 0;
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
@@ -250,9 +256,13 @@ VoxelBox fitBox(const std::vector<Frame> &frames, const CloudSettings &s) {
                 hi = hi.cwiseMax(q);
             }
         }
+        // Cropped like the points: one stray pose metres out would grow every per-cell buffer by the cube of its distance.
         for (const GraspPose &g : f.poses) {
-            lo = lo.cwiseMin(f.camera_to_arm * g.point);
-            hi = hi.cwiseMax(f.camera_to_arm * g.point);
+            const Eigen::Vector3d q = f.camera_to_arm * g.point;
+            if (q.norm() <= s.crop_radius) {
+                lo = lo.cwiseMin(q);
+                hi = hi.cwiseMax(q);
+            }
         }
     }
     VoxelBox box;

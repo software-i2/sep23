@@ -3,6 +3,7 @@
 
 #include <Eigen/Geometry>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <string>
@@ -14,6 +15,15 @@ enum Joint : int { BASE = 0, SHOULDER, ELBOW, WRIST, JOINT_COUNT };
 constexpr const char *JOINT_KEYS[JOINT_COUNT] = {"base", "shoulder", "elbow", "wrist"};
 
 using Joints = std::array<double, JOINT_COUNT>;
+
+// Every joint moves at one speed, so the largest joint move sets the time.
+inline double largestMove(const Joints &a, const Joints &b) {
+    double largest = 0.0;
+    for (int j = 0; j < JOINT_COUNT; ++j) {
+        largest = std::max(largest, std::fabs(b[j] - a[j]));
+    }
+    return largest;
+}
 
 inline double rad(double degrees) { return degrees * M_PI / 180.0; }
 inline double deg(double radians) { return radians * 180.0 / M_PI; }
@@ -87,7 +97,6 @@ public:
     // Samples the blade profile every `blade_step` metres; throws std::invalid_argument on a bad config.
     Arm(const ArmConfig &config, double blade_step);
 
-    const ArmConfig &config() const { return config_; }
     Joints           toModel(const Joints &reported) const;
     Joints           toReported(const Joints &model) const;
     double           lower(int joint) const { return lower_[joint]; }

@@ -23,8 +23,6 @@ struct GraspGoal {
 Outcome graspGoals(const GraspPose &candidate, size_t index, const Joints &start, double along, Collision &collision,
                    std::vector<GraspGoal> &goals);
 
-double largestMove(const Joints &a, const Joints &b);  // the follower moves joints together, so this sets the time
-
 struct PlanSettings {
     double grasp_point_from_mount = 0.0;
     double budget_s = 0.0, goal_budget_s = 0.0;

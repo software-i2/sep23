@@ -122,11 +122,7 @@ Verdict Collision::check(const Joints &q) {
 }
 
 bool Collision::segmentClear(const Joints &a, const Joints &b, double step) {
-    double largest = 0.0;
-    for (int j = 0; j < JOINT_COUNT; ++j) {
-        largest = std::max(largest, std::fabs(b[j] - a[j]));
-    }
-    const int steps = std::max(1, static_cast<int>(std::ceil(largest / step)));
+    const int steps = std::max(1, static_cast<int>(std::ceil(largestMove(a, b) / step)));
     for (int n = 1; n < steps; ++n) {
         Joints q;
         for (int j = 0; j < JOINT_COUNT; ++j) {

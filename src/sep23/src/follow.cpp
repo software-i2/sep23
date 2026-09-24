@@ -8,11 +8,7 @@ namespace sep23 {
 void PathFollower::load(const std::vector<Joints> &corners) {
     waypoints_.clear();
     for (size_t k = 1; k < corners.size(); ++k) {
-        double largest = 0.0;
-        for (int j = 0; j < JOINT_COUNT; ++j) {
-            largest = std::max(largest, std::fabs(corners[k][j] - corners[k - 1][j]));
-        }
-        const int steps = std::max(1, static_cast<int>(std::ceil(largest / s_.max_step)));
+        const int steps = std::max(1, static_cast<int>(std::ceil(largestMove(corners[k - 1], corners[k]) / s_.max_step)));
         for (int n = 1; n <= steps; ++n) {
             Joints w;
             for (int j = 0; j < JOINT_COUNT; ++j) {
@@ -31,11 +27,6 @@ void PathFollower::load(const std::vector<Joints> &corners) {
 void PathFollower::measure(const Joints &q) {
     now_      = q;
     have_now_ = unjudged_ = true;
-}
-
-void PathFollower::loseMeasurement() {
-    have_now_ = have_previous_ = unjudged_ = false;
-    strikes_                               = 0;
 }
 
 Following PathFollower::tick(double now_s, Joints &target, bool &send) {

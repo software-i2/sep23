@@ -294,7 +294,7 @@ public:
               cloud_sub_(nh_, "cloud", 1),
               poses_sub_(nh_, "grasp_poses", 1),
               sync_(cloud_sub_, poses_sub_, 5),
-              track_sync_(cloud_sub_, image_sub_, 5),
+              track_sync_(5),
               tracker_(c.track, c.camera) {
         ros::NodeHandle pnh("~");
         sync_.registerCallback(&Pick::onFrame, this);
@@ -302,6 +302,7 @@ public:
         // Stage 3 off: no image subscription and no /tracker/* topics.
         if (c_.track_enabled) {
             image_sub_.subscribe(nh_, "image", 1);
+            track_sync_.connectInput(cloud_sub_, image_sub_);
             track_sync_.registerCallback(&Pick::onTrackFrame, this);
             view_sub_   = nh_.subscribe("tracker/view", 1, &Pick::onView, this);
             debug_pub_  = nh_.advertise<sensor_msgs::Image>("tracker/debug_image", 1);
@@ -338,7 +339,11 @@ public:
 
     void tick() {
         if (stop_requested_.exchange(false)) {
-            apply(Event::STOP, "stopped on request");
+            if (isWorking(state_)) {
+                apply(Event::STOP, "stopped on request");
+            } else if (!releaseArm()) {  // after a pick the arm still holds its last posture
+                ROS_ERROR("[pick] stop: standby failed, the arm may still be powered");
+            }
         }
         if (start_requested_.exchange(false)) {
             if (isWorking(state_)) {
@@ -372,7 +377,7 @@ private:
         frame_seen_ = ros::Time::now();
     }
 
-    // Stage 3: while the arm moves blind, follow the target in the image. Published only; the arm does not use it yet.
+    // Stage 3: while the arm moves blind, follow the target in the image; with track/steer, steer() moves the goal with it.
     void onTrackFrame(const sensor_msgs::PointCloud2::ConstPtr &cloud, const sensor_msgs::Image::ConstPtr &image) {
         std::lock_guard<std::mutex> lock(track_mutex_);
         if (!tracker_.active()) {
@@ -820,9 +825,7 @@ private:
         target.point += offset;
         std::vector<GraspGoal> goals;
         graspGoals(target, 0, plan_.path.back(), arm_.mountDistance() + c_.plan.grasp_point_from_mount, collision, goals);
-        std::sort(goals.begin(), goals.end(), [&](const GraspGoal &a, const GraspGoal &b) {
-            return largestMove(plan_.path.back(), a.joints) < largestMove(plan_.path.back(), b.joints);
-        });
+        std::sort(goals.begin(), goals.end(), [](const GraspGoal &a, const GraspGoal &b) { return a.swing < b.swing; });
         for (const GraspGoal &g : goals) {
             if (collision.segmentClear(now, g.joints, c_.plan.edge_step)) {
                 plan_.path = {now, g.joints};
@@ -844,10 +847,12 @@ private:
         }
         Joints    reported;
         ros::Time stamp;
+        // Without readings a joint against something goes unnoticed, so the arm holds its last target instead of moving on blind.
         if (!freshJoints(reported, stamp)) {
-            follower_.loseMeasurement();
-            last_stamp_ = ros::Time();
-        } else if (stamp != last_stamp_) {
+            message = "joint_states went stale mid-motion, so contact cannot be judged; holding the last target";
+            return Event::FAILURE;
+        }
+        if (stamp != last_stamp_) {
             last_stamp_ = stamp;
             follower_.measure(arm_.toModel(reported));
         }
