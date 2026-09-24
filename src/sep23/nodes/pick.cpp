@@ -235,8 +235,10 @@ public:
         targets_pub_ = nh_.advertise<sensor_msgs::JointState>("driver/joint_targets", 1);
         close_jaw_   = nh_.serviceClient<std_srvs::Trigger>("driver/close_jaw");
         standby_     = nh_.serviceClient<std_srvs::Trigger>("driver/standby");
+        home_        = nh_.serviceClient<std_srvs::Trigger>("driver/home");
         state_pub_   = pnh.advertise<PickState>("state", 1, true);
-        map_pub_     = pnh.advertise<sensor_msgs::PointCloud2>("map", 1, true);
+        park_map_pub_ = pnh.advertise<sensor_msgs::PointCloud2>("park_map", 1, true);
+        map_pub_     = pnh.advertise<sensor_msgs::PointCloud2>("pick_map", 1, true);
         grasp_pub_   = pnh.advertise<visualization_msgs::MarkerArray>("grasps", 1, true);
         path_pub_    = pnh.advertise<visualization_msgs::Marker>("path", 1, true);
         body_pub_    = pnh.advertise<visualization_msgs::MarkerArray>("body", 1);
@@ -374,12 +376,14 @@ private:
         return true;
     }
 
-    // Puts the simulated vehicle back at the origin, so a soak repeats a pick from the same place.
+    // Puts the simulated vehicle back at the origin and the arm home, so a soak repeats a pick from the same place.
     bool onReset(std_srvs::Trigger::Request &, std_srvs::Trigger::Response &res) {
         res.success = !working_;
         res.message = res.success ? "vehicle back at the origin" : "a pick is running, stop it first";
         if (res.success) {
             setVehicle(VehiclePose());
+            std_srvs::Trigger call;
+            res.message += home_.call(call) ? ", arm " + call.response.message : ", arm not homed: the driver did not answer";
         }
         return true;
     }
@@ -552,7 +556,7 @@ private:
         char took[32];
         std::snprintf(took, sizeof(took), " (%.2f s)", (ros::WallTime::now() - started).toSec());
         message = scene_.summary + took;
-        map_pub_.publish(mapCloud(scene_.map, scene_to_world_, c_.world_frame));
+        (spot_phase_ ? park_map_pub_ : map_pub_).publish(mapCloud(scene_.map, scene_to_world_, c_.world_frame));
         publishGrasps(-1);
         if (!spot_phase_) {
             message += comparedWithSnapshot();
@@ -820,8 +824,8 @@ private:
     message_filters::Subscriber<geometry_msgs::PoseArray>                        poses_sub_;
     message_filters::TimeSynchronizer<sensor_msgs::PointCloud2, geometry_msgs::PoseArray> sync_;
     ros::Subscriber                   joints_sub_;
-    ros::Publisher                    targets_pub_, state_pub_, map_pub_, grasp_pub_, path_pub_, body_pub_, hull_pub_;
-    ros::ServiceClient                close_jaw_, standby_;
+    ros::Publisher                    targets_pub_, state_pub_, park_map_pub_, map_pub_, grasp_pub_, path_pub_, body_pub_, hull_pub_;
+    ros::ServiceClient                close_jaw_, standby_, home_;
     std::vector<ros::ServiceServer>   services_;
     ros::Timer                        tf_timer_;
     tf2_ros::TransformBroadcaster     broadcaster_;

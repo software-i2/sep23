@@ -280,6 +280,16 @@ bool SimulatedActuators::command(uint8_t device, float value) {
     return s != nullptr;
 }
 
+bool SimulatedActuators::place(uint8_t device, float value) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    advance();
+    State *s = find(device);
+    if (s) {
+        s->position = s->target = std::min(std::max(value, s->joint.min), s->joint.max);
+    }
+    return s != nullptr;
+}
+
 bool SimulatedActuators::standby(uint8_t device) {
     std::lock_guard<std::mutex> lock(mutex_);
     advance();

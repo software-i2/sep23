@@ -1,3 +1,6 @@
 [submodule "src/axis_grasp"]
 	path = src/axis_grasp
 	url = https://github.com/software-i3/axis_grasp.git
+[submodule "src/bx_msgs"]
+	path = src/bx_msgs
+	url = https://github.com/BeeX-AS/bx_msgs.git

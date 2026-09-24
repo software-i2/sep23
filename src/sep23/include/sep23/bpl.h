@@ -78,6 +78,8 @@ public:
     bool position(uint8_t device, float &value) override;
     bool command(uint8_t device, float value) override;
     bool standby(uint8_t device) override;
+    // Puts a joint at a value at once, for a reset that should not wait on a ramp.
+    bool place(uint8_t device, float value);
 
 private:
     struct State {

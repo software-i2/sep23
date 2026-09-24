@@ -10,7 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-noetic-tf2-ros \
         ros-noetic-urdf \
         ros-noetic-xacro \
+        tmux \
         libopencv-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN echo 'source /opt/ros/noetic/setup.bash' >> /root/.bashrc
+# Every interactive shell, tmux panes included, gets ROS and the workspace named by $WS.
+RUN echo 'source /opt/ros/noetic/setup.bash; [ -f "$WS/devel/setup.bash" ] && source "$WS/devel/setup.bash"' >> /root/.bashrc

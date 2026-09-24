@@ -7,10 +7,8 @@ ATTEMPT_TIMEOUT="${ATTEMPT_TIMEOUT:-120}"
 field() { rostopic echo -n1 "$1" 2>/dev/null | head -1 | tr -d '"'; }
 
 reset() {
-    rosservice call /pick/reset >/dev/null 2>&1
-    rosservice call /driver/open_jaw >/dev/null 2>&1
-    rosservice call /driver/home >/dev/null 2>&1
-    sleep 8
+    rosservice call /pick/reset >/dev/null 2>&1  # also places the simulated arm home with the jaw open
+    sleep 1
 }
 
 started=$SECONDS attempts=0 success=0 grabbed=0 failed=0 timed_out=0

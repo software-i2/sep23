@@ -27,6 +27,7 @@ inline visualization_msgs::Marker marker(const std::string &frame, const std::st
     m.type               = type;
     m.action             = visualization_msgs::Marker::ADD;
     m.pose.orientation.w = 1.0;
+    m.frame_locked       = true;  // follow the frame as the vehicle moves, not where it was when published
     m.scale.x = m.scale.y = m.scale.z = size;
     m.color.r = r;
     m.color.g = g;

@@ -27,8 +27,9 @@ struct Axis {
 // Publishes joint_states, takes joint targets and the jaw, home and standby calls.
 class Driver {
 public:
-    Driver(std::array<Axis, AXES> axes, double jaw_open, std::shared_ptr<Actuators> actuators, double poll_hz)
-            : axes_(std::move(axes)), jaw_open_(jaw_open), actuators_(std::move(actuators)), poll_hz_(poll_hz) {
+    Driver(std::array<Axis, AXES> axes, double jaw_open, std::shared_ptr<Actuators> actuators, double poll_hz,
+           std::shared_ptr<SimulatedActuators> simulated = nullptr)
+            : axes_(std::move(axes)), jaw_open_(jaw_open), actuators_(std::move(actuators)), simulated_(std::move(simulated)), poll_hz_(poll_hz) {
         ros::NodeHandle nh, pnh("~");
         pub_states_  = nh.advertise<sensor_msgs::JointState>("joint_states", 1);
         sub_targets_ = pnh.subscribe("joint_targets", 1, &Driver::onTargets, this);
@@ -124,6 +125,13 @@ private:
         res.success = std::none_of(read_at_.begin(), read_at_.end(), [](const ros::Time &t) { return t.isZero(); });
         res.message = res.success ? "moving home with the jaw open" : "not every joint has reported a position yet";
         homing_     = res.success;
+        if (res.success && simulated_) {  // the simulated arm skips the ramp
+            for (const Axis &a : axes_) {
+                simulated_->place(a.device, static_cast<float>(a.home * a.wire_per_unit));
+            }
+            homing_     = false;
+            res.message = "placed at home with the jaw open";
+        }
         return true;
     }
 
@@ -158,6 +166,7 @@ private:
     std::array<Axis, AXES>          axes_;
     double                          jaw_open_;
     std::shared_ptr<Actuators>      actuators_;
+    std::shared_ptr<SimulatedActuators> simulated_;  // null on the real arm
     double                          poll_hz_;
     std::mutex                      mutex_;
     std::array<double, AXES>        position_{};
@@ -215,14 +224,16 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    std::shared_ptr<Actuators> actuators;
+    std::shared_ptr<Actuators>          actuators;
+    std::shared_ptr<SimulatedActuators> sim;
     if (simulated) {
         std::vector<SimulatedActuators::Joint> joints;
         for (const Axis &a : axes) {
             joints.push_back({a.device, static_cast<float>(a.min * a.wire_per_unit), static_cast<float>(a.max * a.wire_per_unit),
                               static_cast<float>(a.home * a.wire_per_unit), static_cast<float>(a.speed * a.wire_per_unit)});
         }
-        actuators = std::make_shared<SimulatedActuators>(joints);
+        sim       = std::make_shared<SimulatedActuators>(joints);
+        actuators = sim;
     } else {
         auto serial = std::make_shared<SerialActuators>(port, baud, timeout);
         bool awake  = false;
@@ -240,7 +251,7 @@ int main(int argc, char **argv) {
         actuators = serial;
     }
 
-    Driver driver(axes, axes[JAW].home, actuators, poll_hz);
+    Driver driver(axes, axes[JAW].home, actuators, poll_hz, sim);
     driver.releaseAll();
     ROS_INFO("[driver] talking to %s at %.1f Hz", simulated ? "the simulated arm" : port.c_str(), poll_hz);
     ros::AsyncSpinner spinner(2);
