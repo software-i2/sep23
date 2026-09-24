@@ -27,8 +27,6 @@ public:
     void loseMeasurement();
     Following tick(double now_s, Joints &target, bool &send);
 
-    size_t sent() const { return next_; }
-    size_t waypoints() const { return waypoints_.size(); }
     int    blockedJoint() const { return blocked_joint_; }
 
 private:

@@ -33,4 +33,7 @@ if(CATKIN_ENABLE_TESTING)
   target_include_directories(${PROJECT_NAME}_test PRIVATE ${kdl_parser_INCLUDE_DIRS})
   target_link_libraries(${PROJECT_NAME}_test ${PROJECT_NAME} ${kdl_parser_LIBRARIES})
   target_compile_definitions(${PROJECT_NAME}_test PRIVATE SEP23_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+  add_executable(stage3_bench test/stage3_bench.cpp)  # measures stage 3 under exp/occluder.py; not part of the pick
+  target_link_libraries(stage3_bench ${PROJECT_NAME})
+  add_dependencies(stage3_bench ${PROJECT_NAME}_generate_messages_cpp)
 endif()

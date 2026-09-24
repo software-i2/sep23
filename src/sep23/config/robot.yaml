@@ -65,5 +65,5 @@ driver:
   connect_attempts: 5
   connect_retry_s: 2.0
   wake_speed_deg_s: 0.573                # tiny wrist speed that wakes the arm
-  joint_speed_deg_s: 28.6479             # home ramp, and the simulated arm
+  joint_speed_deg_s: 10.0                # home ramp, and the simulated arm
   jaw_speed_m_s: 0.010

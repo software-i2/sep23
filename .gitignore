@@ -6,3 +6,8 @@ install/
 data/*
 !data/.gitkeep
 graphify-out/
+
+# generated results: never commit
+*.csv
+*.mp4
+*.bag

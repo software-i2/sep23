@@ -72,7 +72,7 @@ plan:
   seed: 1
 
 follow:
-  max_step_deg: 1.25                     # per loop tick, so the speed limit is loop_hz times this
+  max_step_deg: 0.5                      # per loop tick, so the speed limit is loop_hz times this
   arrival_tolerance_deg: 1.5
   arrival_timeout_s: 15.0
   blocked_min_step_deg: 0.2              # only joints asked to move at least this far are watched
@@ -80,6 +80,7 @@ follow:
   blocked_strikes: 10
 
 track:                                   # stage 3: following the target in the image while the arm moves blind
+  enabled: false                         # off: no image subscription, no tracking, the pick runs as without stage 3
   depth_gate_m: 0.05                     # either side of the target's depth; the seabed sits ~0.10 m behind the mine face
   roi_radius_m: 0.25                     # from the target, so a tilted seabed's slice of the gate stays out
   min_points: 15                         # fewer consensus corners than this and corners are found again

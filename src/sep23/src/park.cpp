@@ -188,7 +188,7 @@ ParkSearch::Holds ParkSearch::verify(const std::vector<GraspPose> &grasps, const
         }
         ++out.held;
         for (const GraspGoal &g : goals) {
-            out.swing = std::min(out.swing, largestMove(home, g.joints));
+            out.swing = std::min(out.swing, g.swing);
         }
     }
     return out;

@@ -2,6 +2,7 @@
 <!-- Copyright by BeeX [2026] -->
 <robot name="alpha5" xmlns:xacro="http://ros.org/wiki/xacro">
     <xacro:arg name="robot_yaml" default=""/>
+    <xacro:arg name="camera_fixed_in_world" default="false"/>  <!-- a replayed bag: the pick pins the camera in the world instead -->
     <xacro:property name="robot" value="${xacro.load_yaml('$(arg robot_yaml)')}"/>
     <xacro:property name="frames" value="${robot['frames']}"/>
     <xacro:property name="camera" value="${robot['camera']}"/>
@@ -18,6 +19,7 @@
                 rpy="${' '.join(str(radians(a)) for a in vehicle['arm_mount_rpy_deg'])}"/>
     </joint>
 
+    <xacro:unless value="$(arg camera_fixed_in_world)">
     <link name="camera_mount"/>
     <joint name="camera_mount" type="fixed">
         <parent link="${frames['vehicle']}"/>
@@ -31,6 +33,7 @@
         <child link="${camera['frame']}"/>
         <origin xyz="0 0 0" rpy="${' '.join(str(radians(a)) for a in camera['optical_rpy_deg'])}"/>
     </joint>
+    </xacro:unless>
 
     <xacro:include filename="$(find sep23)/urdf/alpha.urdf.xacro"/>
     <xacro:alpha_urdf parent="${frames['arm']}" prefix="" description_package="sep23">

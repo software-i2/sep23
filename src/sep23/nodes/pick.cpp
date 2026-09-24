@@ -22,6 +22,7 @@
 #include <std_msgs/String.h>
 #include <std_srvs/Trigger.h>
 #include <tf2_eigen/tf2_eigen.h>
+#include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2_ros/transform_broadcaster.h>
 
 #include <atomic>
@@ -92,6 +93,7 @@ struct PickConfig {
     double                               start_tolerance = 0.0;
     FollowSettings                       follow;
     TrackSettings                        track;
+    bool                                 track_enabled = false;
     double                               loop_hz = 0.0, joint_state_timeout_s = 0.0;
     double                               stream_timeout_s = 0.0, spot_search_s = 0.0, repark_search_s = 0.0, snapshot_match = 0.0;
     int                                  retarget_attempts = 0, park_attempts = 0;
@@ -263,7 +265,9 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
     f.blocked_follow_fraction  = pick.number("follow/blocked_follow_fraction");
     f.blocked_strikes          = pick.whole("follow/blocked_strikes");
     pick.require(f.max_step > 0.0 && f.arrival_tolerance > 0.0 && f.blocked_strikes > 0, "follow", "positive step, tolerance and strikes");
+    plan.joint_speed = f.max_step * c.loop_hz;
 
+    c.track_enabled  = pick.flag("track/enabled");
     TrackSettings &t = c.track;
     t.depth_gate     = pick.number("track/depth_gate_m");
     t.roi_radius     = pick.number("track/roi_radius_m");
@@ -285,17 +289,20 @@ public:
               cloud_sub_(nh_, "cloud", 1),
               poses_sub_(nh_, "grasp_poses", 1),
               sync_(cloud_sub_, poses_sub_, 5),
-              image_sub_(nh_, "image", 1),
               track_sync_(cloud_sub_, image_sub_, 5),
               tracker_(c.track, c.camera) {
         ros::NodeHandle pnh("~");
         sync_.registerCallback(&Pick::onFrame, this);
         cloud_sub_.registerCallback(&Pick::onCloudSeen, this);
-        track_sync_.registerCallback(&Pick::onTrackFrame, this);
-        view_sub_    = pnh.subscribe("view", 1, &Pick::onView, this);
-        debug_pub_   = nh_.advertise<sensor_msgs::Image>("stage3/debug_image", 1);
-        mask_pub_    = nh_.advertise<sensor_msgs::Image>("stage3/depth_mask", 1);
-        target_pub_  = nh_.advertise<geometry_msgs::PoseStamped>("stage3/target_pose", 1);
+        // Stage 3 off: no image subscription and no /tracker/* topics.
+        if (c_.track_enabled) {
+            image_sub_.subscribe(nh_, "image", 1);
+            track_sync_.registerCallback(&Pick::onTrackFrame, this);
+            view_sub_   = nh_.subscribe("tracker/view", 1, &Pick::onView, this);
+            debug_pub_  = nh_.advertise<sensor_msgs::Image>("tracker/debug_image", 1);
+            target_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("tracker/target_pose", 1);
+            shift_pub_  = nh_.advertise<visualization_msgs::MarkerArray>("tracker/target_shift", 1, true);
+        }
         joints_sub_  = nh_.subscribe("joint_states", 1, &Pick::onJoints, this);
         targets_pub_ = nh_.advertise<sensor_msgs::JointState>("driver/joint_targets", 1);
         close_jaw_   = nh_.serviceClient<std_srvs::Trigger>("driver/close_jaw");
@@ -312,6 +319,15 @@ public:
         services_ = {pnh.advertiseService("start", &Pick::onStart, this), pnh.advertiseService("stop", &Pick::onStop, this),
                      pnh.advertiseService("reset", &Pick::onReset, this)};
         tf_timer_ = nh_.createTimer(ros::Duration(1.0 / c_.loop_hz), [this](const ros::TimerEvent &) { broadcastVehicle(); });
+        // A replayed bag's camera stayed where it recorded, so the URDF leaves it off the vehicle and it is pinned here,
+        // where the pick already places bag frames: camera_to_vehicle with the vehicle at the origin.
+        if (c_.camera_fixed_in_world) {
+            geometry_msgs::TransformStamped t = tf2::eigenToTransform(c_.camera_to_vehicle);
+            t.header.stamp    = ros::Time::now();
+            t.header.frame_id = c_.world_frame;
+            t.child_frame_id  = c_.camera_frame;
+            static_broadcaster_.sendTransform(t);
+        }
         publishState("waiting for start");
     }
 
@@ -373,12 +389,21 @@ private:
         pose.pose.position.z    = track_.target.z();
         pose.pose.orientation.w = 1.0;
         target_pub_.publish(pose);
+        // From where the arm is aiming to where stage 3 now puts the target: the correction a closed loop would make.
+        trail_.push_back(track_.target);
+        visualization_msgs::Marker shift = marker(c_.camera_frame, "shift", visualization_msgs::Marker::ARROW, 1.0f, 0.3f, 0.9f, 1.0f, 0.003);
+        shift.scale.y = 0.007, shift.scale.z = 0.01;  // shaft and head width, head length
+        shift.points  = {toPoint(track_.target - track_.offset), toPoint(track_.target)};
+        visualization_msgs::Marker trail = marker(c_.camera_frame, "trail", visualization_msgs::Marker::LINE_STRIP, 0.3f, 0.9f, 1.0f, 0.8f, 0.0015);
+        for (const Eigen::Vector3d &p : trail_) {
+            trail.points.push_back(toPoint(p));
+        }
+        visualization_msgs::MarkerArray markers;
+        markers.markers = {shift, trail};
+        shift_pub_.publish(markers);
         // Drawn only for a viewer: Foxglove subscribes to what its panels show.
         if (debug_pub_.getNumSubscribers() > 0) {
             debug_pub_.publish(toImage(drawTrack(bgr, track_, view_.load()), image->header, "bgr8"));
-        }
-        if (mask_pub_.getNumSubscribers() > 0 && !track_.mask.empty()) {
-            mask_pub_.publish(toImage(track_.mask, image->header, "mono8"));
         }
     }
 
@@ -520,9 +545,13 @@ private:
         switch (next) {
         case State::GOTOGRASP: {
             // Stage 3 follows the chosen candidate from where the grasp look saw it.
+            if (!c_.track_enabled) {
+                break;
+            }
             std::lock_guard<std::mutex> lock(track_mutex_);
             tracker_.start(scene_camera_to_arm_.inverse() * scene_.candidates[plan_.candidate].point);
             track_ = TrackResult();
+            trail_.clear();
             break;
         }
         case State::COLLECT: {
@@ -776,11 +805,14 @@ private:
         }
         switch (state) {
         case Following::REACHED: {
-            std::lock_guard<std::mutex> lock(track_mutex_);
-            char                        line[120];
-            std::snprintf(line, sizeof(line), "; stage 3 saw the target move %.1f mm (%s)", 1000 * track_.offset.norm(),
-                          track_.ok ? "tracking" : "not tracking");
-            message = std::string("reached the end of the path") + line;
+            message = "reached the end of the path";
+            if (c_.track_enabled) {
+                std::lock_guard<std::mutex> lock(track_mutex_);
+                char                        line[120];
+                std::snprintf(line, sizeof(line), "; stage 3 saw the target move %.1f mm (%s)", 1000 * track_.offset.norm(),
+                              track_.ok ? "tracking" : "not tracking");
+                message += line;
+            }
             return Event::REACHED;
         }
         case Following::STALLED:
@@ -950,7 +982,8 @@ private:
     message_filters::Subscriber<sensor_msgs::Image>                              image_sub_;
     message_filters::TimeSynchronizer<sensor_msgs::PointCloud2, sensor_msgs::Image> track_sync_;
     ros::Subscriber                                                              view_sub_;
-    ros::Publisher                                                               debug_pub_, mask_pub_, target_pub_;
+    ros::Publisher                                                               debug_pub_, target_pub_, shift_pub_;
+    std::vector<Eigen::Vector3d>                                                 trail_;  // the tracked target over this blind motion
     std::mutex                                                                   track_mutex_;
     Tracker                                                                      tracker_;
     TrackResult                                                                  track_;
@@ -961,6 +994,7 @@ private:
     std::vector<ros::ServiceServer>   services_;
     ros::Timer                        tf_timer_;
     tf2_ros::TransformBroadcaster     broadcaster_;
+    tf2_ros::StaticTransformBroadcaster static_broadcaster_;
 
     std::mutex        sensor_mutex_;
     std::deque<Frame> frames_;

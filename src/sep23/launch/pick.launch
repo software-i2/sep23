@@ -7,9 +7,12 @@
     <arg name="vision" default="false" doc="run axis_grasp and take its grasp poses"/>
     <arg name="foxglove" default="true"/>
     <arg name="config" default="$(find sep23)/config"/>
+    <arg name="track" default="" doc="true or false overrides track/enabled in pick.yaml: stage 3 tracking while the arm moves blind"/>
+    <arg name="occluded" default="false" doc="take the camera from /occluder/image and /occluder/pointcloud (run exp/occluder.py alongside)"/>
 
     <rosparam command="load" ns="robot" file="$(arg config)/robot.yaml"/>
-    <param name="robot_description" command="$(find xacro)/xacro $(find sep23)/urdf/robot.urdf.xacro robot_yaml:=$(arg config)/robot.yaml"/>
+    <arg name="camera_fixed_in_world" value="$(eval 'true' if bag != '' else 'false')"/>  <!-- a bag saw the scene from one place -->
+    <param name="robot_description" command="$(find xacro)/xacro $(find sep23)/urdf/robot.urdf.xacro robot_yaml:=$(arg config)/robot.yaml camera_fixed_in_world:=$(arg camera_fixed_in_world)"/>
     <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher"/>
 
     <node name="driver" pkg="sep23" type="driver" output="screen" required="true">
@@ -18,9 +21,10 @@
 
     <node name="pick" pkg="sep23" type="pick" output="screen">
         <rosparam command="load" file="$(arg config)/pick.yaml"/>
-        <param name="camera_fixed_in_world" value="$(eval bag != '')"/>
-        <remap from="cloud" to="/pointcloud"/>
-        <remap from="image" to="/image"/>
+        <param name="camera_fixed_in_world" value="$(arg camera_fixed_in_world)"/>
+        <param if="$(eval track != '')" name="track/enabled" value="$(arg track)"/>
+        <remap from="cloud" to="$(eval '/occluder/pointcloud' if occluded else '/pointcloud')"/>
+        <remap from="image" to="$(eval '/occluder/image' if occluded else '/image')"/>
         <remap from="grasp_poses" to="$(eval '/grasp_poses_by_pipeline' if vision else '/grasp_poses')"/>
     </node>
 

@@ -171,7 +171,7 @@ cv::Mat drawTrack(const cv::Mat &bgr, const TrackResult &r, TrackView view) {
         }
     }
     const cv::Point c(static_cast<int>(std::lround(r.target_px.x())), static_cast<int>(std::lround(r.target_px.y())));
-    cv::drawMarker(out, c, r.ok ? cyan : red, cv::MARKER_CROSS, 28, 2, cv::LINE_AA);
+    cv::circle(out, c, 8, r.ok ? cyan : red, 2, cv::LINE_AA);
     const size_t inliers = static_cast<size_t>(std::count(r.inlier.begin(), r.inlier.end(), 1));
     char         line[160];
     std::snprintf(line, sizeof(line), "%s  %zu/%zu inliers, %zu lost%s  offset %+.1f %+.1f %+.1f mm",

@@ -28,14 +28,6 @@ const char *outcomeName(Outcome o) {
     return "unknown";
 }
 
-double jointTravel(const Joints &a, const Joints &b) {
-    double sum = 0.0;
-    for (int j = 0; j < JOINT_COUNT; ++j) {
-        sum += std::fabs(b[j] - a[j]);
-    }
-    return sum;
-}
-
 double largestMove(const Joints &a, const Joints &b) {
     double largest = 0.0;
     for (int j = 0; j < JOINT_COUNT; ++j) {
@@ -71,7 +63,7 @@ Outcome graspGoals(const GraspPose &candidate, size_t index, const Joints &start
             }
             const Verdict v = collision.check(q);
             if (v == Verdict::CLEAR) {
-                goals.push_back({index, q, jointTravel(start, q)});
+                goals.push_back({index, q, largestMove(start, q)});
                 found = true;
             } else {
                 reached(v == Verdict::HULL ? Outcome::HULL : v == Verdict::OBSTACLE ? Outcome::OBSTACLE : Outcome::JOINT_LIMIT);
@@ -149,7 +141,7 @@ Plan planGrasp(const std::vector<GraspPose> &candidates, const Joints &start, Co
     for (size_t i = 0; i < candidates.size(); ++i) {
         plan.outcomes[i] = graspGoals(candidates[i], i, start, along, collision, goals);
     }
-    std::sort(goals.begin(), goals.end(), [](const GraspGoal &a, const GraspGoal &b) { return a.travel < b.travel; });
+    std::sort(goals.begin(), goals.end(), [](const GraspGoal &a, const GraspGoal &b) { return a.swing < b.swing; });
 
     for (const GraspGoal &goal : goals) {
         if (plan.ok || cancelled() || remaining() < s.goal_budget_s) {
@@ -160,7 +152,7 @@ Plan planGrasp(const std::vector<GraspPose> &candidates, const Joints &start, Co
             plan.candidate = goal.candidate;
             plan.outcomes[goal.candidate] = Outcome::OK;
             for (size_t k = 1; k < plan.path.size(); ++k) {
-                plan.travel += jointTravel(plan.path[k - 1], plan.path[k]);
+                plan.time_s += largestMove(plan.path[k - 1], plan.path[k]) / s.joint_speed;
             }
         } else if (plan.outcomes[goal.candidate] != Outcome::OK) {
             plan.outcomes[goal.candidate] = Outcome::NO_PATH;
@@ -174,8 +166,8 @@ Plan planGrasp(const std::vector<GraspPose> &candidates, const Joints &start, Co
     char line[160];
     const double spent = s.budget_s - remaining();
     if (plan.ok) {
-        std::snprintf(line, sizeof(line), "chose candidate %zu of %zu, %.3f rad of travel over %zu corners (%.2f s):",
-                      plan.candidate, candidates.size(), plan.travel, plan.path.size(), spent);
+        std::snprintf(line, sizeof(line), "chose candidate %zu of %zu, %.2f s of arm motion over %zu corners (%.2f s):",
+                      plan.candidate, candidates.size(), plan.time_s, plan.path.size(), spent);
     } else {
         std::snprintf(line, sizeof(line), "no path to any of %zu candidates (%.2f s):", candidates.size(), spent);
     }
