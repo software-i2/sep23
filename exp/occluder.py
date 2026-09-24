@@ -12,8 +12,11 @@ Control: /occluder/enable (std_msgs/Bool), /occluder/mode (std_msgs/Int32, 0-4).
 With _follow_pick:=true it switches itself ON when /pick/state reaches GOTOGRASP (the arm comes into view) and holds it
 after the pick ends; it clears when the pick looks again (a new start, as soak.sh does, or a re-survey) or the mode changes.
 
-Modes: 0 clear | 1 flat, linear 0-50% | 2 textured, jittered 0-50% | 3 flat, linear 0-100% | 4 textured, jittered 0-100%.
-Coverage is of the whole frame; the obstacle enters from the right with a tilted leading edge.
+The coverage freezes where it is when the pick reaches CLOSEJAW (follow_pick only), like an arm that stopped to grasp.
+
+Modes: 0 clear | 1 flat, linear 0-50% | 2 textured, random 0-50% | 3 flat, linear 0-100% | 4 textured, random 0-100%.
+Coverage is of the whole frame. Every switch-on rolls a new side for the obstacle to come in from. 1 and 3 then sweep in
+straight; 2 and 4 also roll their pace, a wobble in coverage, a drift in direction and a ragged edge. _seed:=N repeats a run.
 """
 import numpy as np
 
@@ -22,29 +25,51 @@ TEXTURED = {2, 4}
 FLAT_BGR = (70, 70, 70)
 
 
-def coverage(mode, t, sweep_s):
+def roll(mode, rng):
+    """One switch-on's dice: the side the obstacle comes from and, for the textured modes, how it wanders on the way.
+    Each wave list is (amplitude, frequency, phase) terms for waves()."""
+    dice = {"angle": rng.uniform(0.0, 360.0), "pace": 1.0, "sway": [], "drift": [], "edge": []}
+    if mode in TEXTURED:
+        terms = lambda n, amp, freq: [(rng.uniform(*amp), rng.uniform(*freq), rng.uniform(0, 2 * np.pi)) for _ in range(n)]
+        dice["pace"] = rng.uniform(0.6, 1.4)             # times sweep_s
+        dice["sway"] = terms(3, (0.02, 0.08), (0.2, 2.5))  # coverage fraction, Hz: an arm under load
+        dice["drift"] = terms(2, (10, 45), (0.05, 0.3))    # deg, Hz: the direction it comes from swings
+        dice["edge"] = terms(2, (0.01, 0.05), (0.5, 3))    # fraction of the diagonal, bumps across the frame
+    return dice
+
+
+def waves(terms, x):
+    return sum(a * np.sin(2 * np.pi * f * x + p) for a, f, p in terms)
+
+
+def coverage(mode, t, sweep_s, dice):
     """Target fraction of the frame covered t seconds after the obstacle was switched on."""
     if mode not in RANGES:
         return 0.0
     lo, hi = RANGES[mode]
-    s = min(t / sweep_s, 1.0)
-    if mode in TEXTURED:  # a slow sway plus a choppy step, like an arm under load
-        s += 0.08 * np.sin(2 * np.pi * 1.3 * t) + 0.04 * np.sign(np.sin(2 * np.pi * 3.1 * t))
+    s = min(t / (sweep_s * dice["pace"]), 1.0) + waves(dice["sway"], t)
     return lo + (hi - lo) * float(np.clip(s, 0.0, 1.0))
 
 
-def obstacle_mask(shape, cover, tilt_deg):
-    """Pixels right of a tilted edge, placed by bisection so the covered fraction of the frame is `cover`."""
+def direction(t, dice):
+    """Where the obstacle comes in from, deg: 0 from the right, 90 from the bottom."""
+    return dice["angle"] + waves(dice["drift"], t)
+
+
+def obstacle_mask(shape, cover, angle_deg, edge=()):
+    """The `cover` fraction of the frame lying furthest towards angle_deg, behind a straight or ragged edge.
+    Also returns (dy, dx), how far the edge has come in, for sliding a texture along with it."""
     h, w = shape
-    tilt = np.tan(np.radians(tilt_deg)) * (np.arange(h) - h / 2)  # the edge's offset on each row
-    lo, hi = -np.abs(tilt).max() - 1, w + np.abs(tilt).max() + 1   # edge positions covering everything, nothing
-    for _ in range(40):
-        mid = (lo + hi) / 2
-        if np.clip(w - mid - tilt, 0, w).sum() > cover * h * w:
-            lo = mid
-        else:
-            hi = mid
-    return np.arange(w)[None, :] >= (hi + tilt)[:, None]
+    step = 4  # ponytail: scored on 4 px blocks to keep up with the camera (~1 ms, not ~20); per pixel if the steps show
+    v, u = np.mgrid[0:h:step, 0:w:step] + (step - 1) / 2 - np.array([(h - 1) / 2, (w - 1) / 2])[:, None, None]
+    c, s, diag = np.cos(np.radians(angle_deg)), np.sin(np.radians(angle_deg)), np.hypot(h, w)
+    score = u * c + v * s + diag * waves(edge, (v * c - u * s) / diag)
+    k = int(round(cover * score.size))
+    if k == 0:
+        return np.zeros(shape, bool), (0, 0)
+    edge_at = np.partition(score.ravel(), score.size - k)[score.size - k]
+    mask = np.repeat(np.repeat(score >= edge_at, step, 0), step, 1)[:h, :w]
+    return mask, (int(round(edge_at * s)), int(round(edge_at * c)))
 
 
 def texture(shape, seed=7):
@@ -61,7 +86,7 @@ def texture(shape, seed=7):
 def paint(bgr, mask, pattern, shift):
     """Fills the mask with the flat arm colour, or with the pattern slid by `shift` px so it moves with the obstacle."""
     out = bgr.copy()
-    out[mask] = FLAT_BGR if pattern is None else np.roll(pattern, -int(shift), axis=1)[mask]
+    out[mask] = FLAT_BGR if pattern is None else np.roll(pattern, shift, axis=(0, 1))[mask]
     return out
 
 
@@ -100,8 +125,8 @@ def run():
         time.sleep(0.5)
     rospy.init_node("occluder")
     state = {"mode": int(rospy.get_param("~mode", 1)), "on": bool(rospy.get_param("~enabled", False)),
-             "since": rospy.get_time(), "pattern": None, "paired": rospy.get_time(), "seen": 0.0}
-    sweep_s, tilt = rospy.get_param("~sweep_s", 3.0), rospy.get_param("~tilt_deg", 20.0)
+             "since": rospy.get_time(), "pattern": None, "paired": rospy.get_time(), "seen": 0.0, "frozen": None}
+    sweep_s, rng = rospy.get_param("~sweep_s", 8.0), np.random.default_rng(rospy.get_param("~seed", None))
     pub_image = rospy.Publisher("/occluder/image", Image, queue_size=2)
     pub_cloud = rospy.Publisher("/occluder/pointcloud", PointCloud2, queue_size=2)
     pub_cover = rospy.Publisher("/occluder/coverage", Float32, queue_size=2)
@@ -115,11 +140,12 @@ def run():
         return out
 
     def rearm(on=None, mode=None):
-        """Any switch restarts the sweep from the start; OFF is clean pass-through."""
+        """Any switch restarts the sweep from the start with fresh dice; OFF is clean pass-through."""
         state["on"] = state["on"] if on is None else on
         state["mode"] = state["mode"] if mode is None else mode
-        state["since"] = rospy.get_time()
-        rospy.loginfo("[occluder] %s, mode %d", "ON" if state["on"] else "OFF", state["mode"])
+        state["since"], state["frozen"], state["dice"] = rospy.get_time(), None, roll(state["mode"], rng)
+        rospy.loginfo("[occluder] %s, mode %d, from %.0f deg", "ON" if state["on"] else "OFF", state["mode"],
+                      state["dice"]["angle"])
 
     follow_pick = rospy.get_param("~follow_pick", False)
 
@@ -133,13 +159,13 @@ def run():
         h, w, ch = image.height, image.width, channels[image.encoding]  # KeyError: an encoding we do not handle
         if cloud.width * cloud.height != h * w:
             raise ValueError(f"cloud has {cloud.width * cloud.height} points for a {w}x{h} image")
-        cover = coverage(state["mode"], rospy.get_time() - state["since"], sweep_s)
-        mask = obstacle_mask((h, w), cover, tilt)
+        t, dice = rospy.get_time() - state["since"] if state["frozen"] is None else state["frozen"], state["dice"]
+        mask, shift = obstacle_mask((h, w), coverage(state["mode"], t, sweep_s, dice), direction(t, dice), dice["edge"])
         pixels = np.frombuffer(image.data, np.uint8).reshape(h, image.step)[:, :w * ch].reshape(h, w, ch)
         bgr = pixels[..., ::-1] if image.encoding == "rgb8" else np.repeat(pixels, 3, 2) if ch == 1 else pixels
         if state["mode"] in TEXTURED and (state["pattern"] is None or state["pattern"].shape[:2] != (h, w)):
             state["pattern"] = texture((h, w))
-        painted = paint(bgr, mask, state["pattern"] if state["mode"] in TEXTURED else None, (1.0 - cover) * w)
+        painted = paint(bgr, mask, state["pattern"] if state["mode"] in TEXTURED else None, shift)
         painted = painted[..., ::-1] if image.encoding == "rgb8" else painted[..., :1] if ch == 1 else painted
         out_image = copy.copy(image)
         out_image.step, out_image.data = w * ch, np.ascontiguousarray(painted).tobytes()
@@ -187,6 +213,9 @@ def run():
         def on_pick(msg):
             if msg.state == "GOTOGRASP" and not state["on"]:
                 rearm(on=True)
+            elif msg.state == "CLOSEJAW" and state["on"] and state["frozen"] is None:  # the arm stops: so does the sweep
+                state["frozen"] = rospy.get_time() - state["since"]
+                rospy.loginfo("[occluder] jaws closing: held %.1f s into the sweep", state["frozen"])
             elif msg.state in ("STREAM", "COLLECT") and state["on"]:  # the pick is looking again: give it clean frames
                 rearm(on=False)
 
