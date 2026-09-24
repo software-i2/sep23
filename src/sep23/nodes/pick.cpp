@@ -93,7 +93,8 @@ struct PickConfig {
     double                               start_tolerance = 0.0;
     FollowSettings                       follow;
     TrackSettings                        track;
-    bool                                 track_enabled = false;
+    bool                                 track_enabled = false, track_steer = false;
+    double                               track_retarget = 0.0, track_max_shift = 0.0;
     double                               loop_hz = 0.0, joint_state_timeout_s = 0.0;
     double                               stream_timeout_s = 0.0, spot_search_s = 0.0, repark_search_s = 0.0, snapshot_match = 0.0;
     int                                  retarget_attempts = 0, park_attempts = 0;
@@ -267,7 +268,11 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
     pick.require(f.max_step > 0.0 && f.arrival_tolerance > 0.0 && f.blocked_strikes > 0, "follow", "positive step, tolerance and strikes");
     plan.joint_speed = f.max_step * c.loop_hz;
 
-    c.track_enabled  = pick.flag("track/enabled");
+    c.track_enabled   = pick.flag("track/enabled");
+    c.track_steer     = pick.flag("track/steer");
+    c.track_retarget    = pick.number("track/retarget_m");
+    c.track_max_shift = pick.number("track/max_shift_m");
+    pick.require(c.track_retarget > 0.0 && c.track_max_shift > c.track_retarget, "track/max_shift_m", "above a positive retarget_m");
     TrackSettings &t = c.track;
     t.depth_gate     = pick.number("track/depth_gate_m");
     t.roi_radius     = pick.number("track/roi_radius_m");
@@ -345,6 +350,7 @@ public:
                 surveying_since_ = reparking_since_ = ros::Time();
                 run_started_                        = ros::Time::now();
                 map_pub_.publish(mapCloud(ObstacleMap(), Eigen::Isometry3d::Identity(), c_.world_frame));
+                clearTrails();
                 apply(Event::START, "started");
             }
         }
@@ -398,8 +404,10 @@ private:
         for (const Eigen::Vector3d &p : trail_) {
             trail.points.push_back(toPoint(p));
         }
+        visualization_msgs::Marker ball = marker(c_.camera_frame, "target", visualization_msgs::Marker::SPHERE, 1.0f, 0.55f, 0.0f, 1.0f, 0.012);
+        ball.pose.position = toPoint(track_.target);
         visualization_msgs::MarkerArray markers;
-        markers.markers = {shift, trail};
+        markers.markers = {shift, trail, ball};
         shift_pub_.publish(markers);
         // Drawn only for a viewer: Foxglove subscribes to what its panels show.
         if (debug_pub_.getNumSubscribers() > 0) {
@@ -764,14 +772,16 @@ private:
             start[j] = std::min(std::max(start[j], arm_.lower(j)), arm_.upper(j));
         }
         try {
-            ObstacleGrid grid(scene_.map, c_.park.link_radius, bladeRadius(scene_.map.box.voxel, c_.park.blade_step));
-            Collision    collision(arm_, grid, c_.hull, c_.park.link_step);
+            grid_.reset(new ObstacleGrid(scene_.map, c_.park.link_radius, bladeRadius(scene_.map.box.voxel, c_.park.blade_step)));
+            Collision collision(arm_, *grid_, c_.hull, c_.park.link_step);
             plan_ = planGrasp(scene_.candidates, start, collision, c_.plan, [this] { return stop_requested_.load(); });
         } catch (const std::invalid_argument &e) {
             message = std::string("the obstacle map is not usable: ") + e.what();
             return Event::FAILURE;
         }
-        message = plan_.summary;
+        steered_ = aimed_ = Eigen::Vector3d::Zero();
+        retargets_ = 0;
+        message  = plan_.summary;
         publishGrasps(plan_.ok ? static_cast<int>(plan_.candidate) : -1);
         publishPath();
         if (!plan_.ok) {
@@ -782,7 +792,56 @@ private:
         return Event::PLAN_FOUND;
     }
 
+    // Closed loop, a first cut. When the tracker puts the target track/retarget_m or more from where the arm is heading, the
+    // goal moves with it: the obstacles shift by the same offset (the scene taken as rigid, as vehicle drift makes it), the
+    // shifted target gets its holding posture nearest the current goal, and the arm heads there on a straight line from
+    // where it is, if that line is clear. Otherwise it stays on course until the next shift. No planner runs, so the arm
+    // never waits. Shifts beyond track/max_shift_m are ignored: heavily occluded, the tracker can claim to track while
+    // metres off.
+    void steer() {
+        Eigen::Vector3d offset;
+        {
+            std::lock_guard<std::mutex> lock(track_mutex_);
+            if (!track_.ok) {
+                return;
+            }
+            offset = scene_camera_to_arm_.linear() * track_.offset;
+        }
+        Joints    now;
+        ros::Time stamp;
+        if (offset.norm() > c_.track_max_shift || (offset - steered_).norm() < c_.track_retarget || !freshJoints(now, stamp)) {
+            return;
+        }
+        steered_ = offset;  // tried once per shift
+        now      = arm_.toModel(now);
+        grid_->setQueryToMap(Eigen::Isometry3d(Eigen::Translation3d(-offset)));  // a point near the moved scene, in the map
+        Collision collision(arm_, *grid_, c_.hull, c_.park.link_step);
+        GraspPose target = scene_.candidates[plan_.candidate];
+        target.point += offset;
+        std::vector<GraspGoal> goals;
+        graspGoals(target, 0, plan_.path.back(), arm_.mountDistance() + c_.plan.grasp_point_from_mount, collision, goals);
+        std::sort(goals.begin(), goals.end(), [&](const GraspGoal &a, const GraspGoal &b) {
+            return largestMove(plan_.path.back(), a.joints) < largestMove(plan_.path.back(), b.joints);
+        });
+        for (const GraspGoal &g : goals) {
+            if (collision.segmentClear(now, g.joints, c_.plan.edge_step)) {
+                plan_.path = {now, g.joints};
+                aimed_     = offset;
+                follower_.load(plan_.path);
+                last_stamp_ = ros::Time();
+                ++retargets_;
+                publishPath();
+                ROS_INFO_THROTTLE(1.0, "[pick] tracker moved the target %.0f mm: heading for it", 1000 * offset.norm());
+                return;
+            }
+        }
+        ROS_INFO_THROTTLE(1.0, "[pick] tracker moved the target %.0f mm: no straight way there yet, staying on course", 1000 * offset.norm());
+    }
+
     Event follow(std::string &message) {
+        if (c_.track_enabled && c_.track_steer) {
+            steer();
+        }
         Joints    reported;
         ros::Time stamp;
         if (!freshJoints(reported, stamp)) {
@@ -809,9 +868,14 @@ private:
             if (c_.track_enabled) {
                 std::lock_guard<std::mutex> lock(track_mutex_);
                 char                        line[120];
-                std::snprintf(line, sizeof(line), "; stage 3 saw the target move %.1f mm (%s)", 1000 * track_.offset.norm(),
+                std::snprintf(line, sizeof(line), "; the tracker saw the target move %.1f mm (%s)", 1000 * track_.offset.norm(),
                               track_.ok ? "tracking" : "not tracking");
                 message += line;
+                if (c_.track_steer) {
+                    const double behind = (scene_camera_to_arm_.linear() * track_.offset - aimed_).norm();
+                    std::snprintf(line, sizeof(line), "; %d retargets left the goal %.1f mm from it", retargets_, 1000 * behind);
+                    message += line;
+                }
             }
             return Event::REACHED;
         }
@@ -952,6 +1016,19 @@ private:
         path_pub_.publish(line);
     }
 
+    // The last run's planned path and tracker trail are latched: wipe them so a new run starts on a clean view.
+    void clearTrails() {
+        visualization_msgs::Marker line = marker(c_.arm_frame, "path", visualization_msgs::Marker::LINE_STRIP, 0, 0, 0, 0, 0);
+        line.action                      = visualization_msgs::Marker::DELETE;
+        path_pub_.publish(line);
+        if (c_.track_enabled) {
+            visualization_msgs::MarkerArray wipe;
+            wipe.markers.push_back(marker(c_.camera_frame, "", visualization_msgs::Marker::ARROW, 0, 0, 0, 0, 0));
+            wipe.markers[0].action = visualization_msgs::Marker::DELETEALL;
+            shift_pub_.publish(wipe);
+        }
+    }
+
     void publishBody() {
         Joints    reported;
         ros::Time stamp;
@@ -1016,6 +1093,10 @@ private:
     Eigen::Isometry3d scene_to_world_ = Eigen::Isometry3d::Identity(), snapshot_to_world_ = Eigen::Isometry3d::Identity();
     Plan              plan_;
     Eigen::Isometry3d scene_camera_to_arm_ = Eigen::Isometry3d::Identity();  // the newest frame of the look, for stage 3
+    Eigen::Vector3d   steered_             = Eigen::Vector3d::Zero();      // the last tracked shift tried, arm frame
+    Eigen::Vector3d   aimed_               = Eigen::Vector3d::Zero();      // the shift the goal actually took
+    int               retargets_             = 0;
+    std::unique_ptr<ObstacleGrid> grid_;  // the grasp look's obstacles, inflated once; steering shifts it by a query offset
     VehiclePose       drive_from_, drive_to_;
     int               drive_steps_ = 1, drive_step_ = 0;
     ros::Time         jaw_closed_at_, jaw_last_seen_, jaw_still_since_;

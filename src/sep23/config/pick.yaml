@@ -81,6 +81,9 @@ follow:
 
 track:                                   # stage 3: following the target in the image while the arm moves blind
   enabled: false                         # off: no image subscription, no tracking, the pick runs as without stage 3
+  steer: true                            # move the goal to where the tracker puts the target; false only watches
+  retarget_m: 0.01                         # retarget once the tracked target is this far from where the arm is heading
+  max_shift_m: 0.10                      # a tracked shift past this is taken as a tracking failure and ignored
   depth_gate_m: 0.05                     # either side of the target's depth; the seabed sits ~0.10 m behind the mine face
   roi_radius_m: 0.25                     # from the target, so a tilted seabed's slice of the gate stays out
   min_points: 15                         # fewer consensus corners than this and corners are found again
