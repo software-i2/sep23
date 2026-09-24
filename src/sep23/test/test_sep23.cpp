@@ -3,10 +3,12 @@
 #include <sep23/follow.h>
 #include <sep23/fsm.h>
 #include <sep23/park.h>
+#include <sep23/track.h>
 
 #include <gtest/gtest.h>
 #include <kdl/chainfksolverpos_recursive.hpp>
 #include <kdl_parser/kdl_parser.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <cstdio>
 #include <memory>
@@ -207,6 +209,71 @@ TEST(Park, ReachMapNeverRefusesWhatTheIkSolves) {
         }
     }
     EXPECT_GT(solvable, 500);
+}
+
+// A mine face drifting across the image, an arm patch inside the depth gate moving the other way, a seabed behind the gate.
+TEST(Track, FollowsTheMineThroughAnArmInsideTheGate) {
+    CameraModel camera{320, 240, 250.0, 250.0, 160.0, 120.0};
+    TrackSettings s{0.05, 0.25, 15, 150, 2.5};
+    const auto    texture = [&] {
+        cv::Mat t(480, 640, CV_8U);
+        cv::randu(t, 0, 255);
+        cv::GaussianBlur(t, t, cv::Size(0, 0), 2.0);
+        cv::normalize(t, t, 0, 255, cv::NORM_MINMAX);
+        return t;
+    };
+    const cv::Mat mine = texture(), arm = texture(), seabed = texture();
+    const double  dx = 1.5, dy = -1.0;  // the mine's drift per frame, pixels
+    const auto    frame = [&](int k, cv::Mat &gray, std::vector<Eigen::Vector3f> &points) {
+        gray.create(camera.height, camera.width, CV_8U);
+        points.resize(static_cast<size_t>(camera.width) * camera.height);
+        for (int v = 0; v < camera.height; ++v) {
+            for (int u = 0; u < camera.width; ++u) {
+                double       depth;
+                uint8_t      value;
+                const bool   in_arm = u >= 150 && u < 200 && v >= 60 && v < 200;
+                if (u >= 260) {
+                    depth = 0.50, value = seabed.at<uint8_t>(v + 100, u + 100);
+                } else if (in_arm) {
+                    depth = 0.42, value = arm.at<uint8_t>(v + 100 - 2 * k, u + 100 + 3 * k);
+                } else {
+                    depth = 0.40, value = mine.at<uint8_t>(static_cast<int>(std::lround(v + 100 - k * dy)), static_cast<int>(std::lround(u + 100 - k * dx)));
+                }
+                gray.at<uint8_t>(v, u) = value;
+                points[static_cast<size_t>(v) * camera.width + u] =
+                        Eigen::Vector3f(static_cast<float>((u - camera.cx) * depth / camera.fx), static_cast<float>(-(v - camera.cy) * depth / camera.fy),
+                                        static_cast<float>(-depth));
+            }
+        }
+    };
+
+    Tracker tracker(s, camera);
+    const Eigen::Vector2d start_px(80.0, 120.0);
+    tracker.start(Eigen::Vector3d((start_px.x() - camera.cx) * 0.40 / camera.fx, -(start_px.y() - camera.cy) * 0.40 / camera.fy, -0.40));
+    cv::Mat                      gray;
+    std::vector<Eigen::Vector3f> points;
+    TrackResult                  r;
+    size_t                       arm_rejected = 0;
+    const int                    frames = 10;
+    for (int k = 0; k <= frames; ++k) {
+        frame(k, gray, points);
+        r = tracker.update(gray, points);
+        ASSERT_TRUE(r.ok) << "frame " << k;
+        for (size_t i = 0; i < r.to.size(); ++i) {
+            arm_rejected += !r.inlier[i] && r.to[i].x >= 150 && r.to[i].x < 200;
+        }
+        for (const cv::Point2f &p : r.to) {
+            EXPECT_LT(p.x, 260.0f) << "a seabed corner passed the depth gate";
+        }
+    }
+    // Rounded pixel sampling makes the drift jitter by half a pixel; the RANSAC fit averages it out.
+    EXPECT_NEAR(r.target_px.x(), start_px.x() + frames * dx, 1.0);
+    EXPECT_NEAR(r.target_px.y(), start_px.y() + frames * dy, 1.0);
+    // camera_link: +x right, +y up, so drifting right and up in the image is +x and +y.
+    EXPECT_NEAR(r.offset.x(), frames * dx * 0.40 / camera.fx, 0.002);
+    EXPECT_NEAR(r.offset.y(), -frames * dy * 0.40 / camera.fy, 0.002);
+    EXPECT_NEAR(r.offset.z(), 0.0, 0.002);
+    EXPECT_GT(arm_rejected, 0u) << "RANSAC never rejected an arm corner";
 }
 
 TEST(Cloud, ConsensusKeepsWhatFramesAgreeOn) {

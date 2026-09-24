@@ -173,7 +173,7 @@ void ParkSearch::shortlist(const std::vector<GraspPose> &grasps, std::vector<Sco
 }
 
 ParkSearch::Holds ParkSearch::verify(const std::vector<GraspPose> &grasps, const VehiclePose &move, ObstacleGrid &grid,
-                                       const Joints &home, size_t stride, bool routes) const {
+                                       const Joints &home, size_t stride) const {
     const Eigen::Isometry3d to_moved = armMove(move).inverse();
     grid.setQueryToMap(armMove(move));
     Collision collision(arm_, grid, hull_, s_.link_step, stride);
@@ -187,9 +187,9 @@ ParkSearch::Holds ParkSearch::verify(const std::vector<GraspPose> &grasps, const
             continue;
         }
         ++out.held;
-        out.routes += routes && std::any_of(goals.begin(), goals.end(), [&](const GraspGoal &g) {
-                          return collision.segmentClear(home, g.joints, s_.edge_step);
-                      });
+        for (const GraspGoal &g : goals) {
+            out.swing = std::min(out.swing, largestMove(home, g.joints));
+        }
     }
     return out;
 }
@@ -226,7 +226,7 @@ ParkChoice ParkSearch::choose(const std::vector<GraspPose> &grasps, const Obstac
             break;
         }
         ++screened;
-        const int held = verify(grasps, o.move, grid, home, stride, false).held;
+        const int held = verify(grasps, o.move, grid, home, stride).held;
         if (held > 0) {
             ranked.emplace_back(held, o.move);
         }
@@ -237,10 +237,14 @@ ParkChoice ParkSearch::choose(const std::vector<GraspPose> &grasps, const Obstac
         return a.first != b.first ? a.first > b.first : travel(a.second) < travel(b.second);
     });
 
-    // Routes first, holds second: a pose with more holds and no straight route from home is the no-path case.
+    // Staying first, so it wins ties: the drive is time the scene spends moving away from the snapshot.
+    std::vector<ParkChoice> holding;
+    const Holds             stay = verify(grasps, VehiclePose(), grid, home, 1);
+    if (stay.held > 0) {
+        holding.push_back({ParkDecision::STAY, VehiclePose(), stay.held, stay.swing, ""});
+    }
     // Exact slots go to poses the vehicle can actually drive to; a refused drive does not use one up.
-    ParkChoice best;
-    int        blocked = 0, exact = 0;
+    int blocked = 0, exact = 0;
     for (size_t i = 0; i < ranked.size() && exact < s_.exact_count && !cancelled(); ++i) {
         const VehiclePose &m = ranked[i].second;
         if (!transitClear(m, grid, home)) {
@@ -248,33 +252,34 @@ ParkChoice ParkSearch::choose(const std::vector<GraspPose> &grasps, const Obstac
             continue;
         }
         ++exact;
-        const int held = verify(grasps, m, grid, home, 1, false).held;
-        if (held == 0) {
-            continue;
-        }
-        const int routes = verify(grasps, m, grid, home, stride, true).routes;
-        if (best.decision == ParkDecision::NOWHERE || routes > best.routes || (routes == best.routes && held > best.held)) {
-            best = {ParkDecision::MOVE, m, held, routes, ""};
+        const Holds h = verify(grasps, m, grid, home, 1);
+        if (h.held > 0) {
+            holding.push_back({ParkDecision::MOVE, m, h.held, h.swing, ""});
         }
     }
 
-    // Staying needs no drive, so it wins ties; the drive is time the scene spends moving away from the snapshot.
-    const Holds stay = verify(grasps, VehiclePose(), grid, home, 1, true);
-    if (stay.held > 0 && (stay.routes > best.routes || (stay.routes == best.routes && stay.held >= best.held))) {
-        best = {ParkDecision::STAY, VehiclePose(), stay.held, stay.routes, ""};
+    // Least swing first: the arm moves blind, the drive is surveyed again after it. No path is tested, so the swing is a
+    // lower bound; poses within swing_band of the least count as equal, and more holds, then the shorter drive, win.
+    double least = std::numeric_limits<double>::infinity();
+    for (const ParkChoice &c : holding) {
+        least = std::min(least, c.swing);
     }
-    // A move without a straight route is only refused when staying still reaches something.
-    if (best.decision == ParkDecision::MOVE && best.routes == 0 && stay.held > 0) {
-        best = {ParkDecision::STAY, VehiclePose(), stay.held, stay.routes, ""};
+    ParkChoice best;
+    for (const ParkChoice &c : holding) {
+        if (c.swing <= least + s_.swing_band
+            && (best.decision == ParkDecision::NOWHERE || c.held > best.held || (c.held == best.held && travel(c.move) < travel(best.move)))) {
+            best = c;
+        }
     }
 
-    char line[320];
+    const auto swing = [](int held, double s) { return held > 0 ? std::to_string(std::lround(deg(s))) + " deg" : std::string("none"); };
+    char line[360];
     std::snprintf(line, sizeof(line),
                   "%zu moves searched in %.1f s, %zu screened, %zu hold something, %d refused for dragging the arm through the scene, %d checked exactly; "
-                  "staying holds %d routes %d; %s (%.2f %.2f %.2f m, %.0f deg) holds %d routes %d",
-                  searched, search_s, screened, ranked.size(), blocked, exact, stay.held, stay.routes,
+                  "staying holds %d, least swing %s; %s (%.2f %.2f %.2f m, %.0f deg) holds %d, least swing %s",
+                  searched, search_s, screened, ranked.size(), blocked, exact, stay.held, swing(stay.held, stay.swing).c_str(),
                   best.decision == ParkDecision::MOVE ? "moving" : best.decision == ParkDecision::STAY ? "staying" : "nowhere",
-                  best.move.x, best.move.y, best.move.z, deg(best.move.yaw), best.held, best.routes);
+                  best.move.x, best.move.y, best.move.z, deg(best.move.yaw), best.held, swing(best.held, best.swing).c_str());
     best.summary = line;
     return best;
 }

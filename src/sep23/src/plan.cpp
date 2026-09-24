@@ -36,6 +36,14 @@ double jointTravel(const Joints &a, const Joints &b) {
     return sum;
 }
 
+double largestMove(const Joints &a, const Joints &b) {
+    double largest = 0.0;
+    for (int j = 0; j < JOINT_COUNT; ++j) {
+        largest = std::max(largest, std::fabs(b[j] - a[j]));
+    }
+    return largest;
+}
+
 Outcome graspGoals(const GraspPose &candidate, size_t index, const Joints &start, double along, Collision &collision,
                    std::vector<GraspGoal> &goals) {
     const Arm &arm      = collision.arm();

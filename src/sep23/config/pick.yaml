@@ -57,6 +57,7 @@ park:
   screen_budget_s: 10.0
   screen_blade_stride: 20                # screening tests every nth blade sample; the winner is rechecked
   exact_count: 10                        # best drivable poses rechecked at full fidelity
+  swing_band_deg: 5.0                    # poses this close to the least arm swing count as equal; more holds, then the shorter drive
   transit_samples: 16                    # points along the drive where the arm is checked
   reach_cell_m: 0.002
   speed_m_s: 0.05                        # the simulated vehicle
@@ -77,3 +78,10 @@ follow:
   blocked_min_step_deg: 0.2              # only joints asked to move at least this far are watched
   blocked_follow_fraction: 0.2           # moving less than this share of the command is a strike
   blocked_strikes: 10
+
+track:                                   # stage 3: following the target in the image while the arm moves blind
+  depth_gate_m: 0.05                     # either side of the target's depth; the seabed sits ~0.10 m behind the mine face
+  roi_radius_m: 0.25                     # from the target, so a tilted seabed's slice of the gate stays out
+  min_points: 15                         # fewer consensus corners than this and corners are found again
+  max_points: 150
+  ransac_px: 2.5                         # 2D reprojection threshold: floating particles and arm edges fall outside it

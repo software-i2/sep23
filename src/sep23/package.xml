@@ -11,6 +11,7 @@
   <exec_depend>message_runtime</exec_depend>
 
   <depend>geometry_msgs</depend>
+  <depend>libopencv-dev</depend>
   <depend>message_filters</depend>
   <depend>ompl</depend>
   <depend>roscpp</depend>

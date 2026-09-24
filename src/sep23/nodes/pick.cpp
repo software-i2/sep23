@@ -7,24 +7,70 @@
 #include <sep23/park.h>
 #include <sep23/params.h>
 #include <sep23/plan.h>
+#include <sep23/track.h>
 
 #include <geometry_msgs/PoseArray.h>
+#include <geometry_msgs/PoseStamped.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/time_synchronizer.h>
 #include <ompl/util/Console.h>
 #include <ompl/util/RandomNumbers.h>
+#include <opencv2/imgproc.hpp>
 #include <ros/ros.h>
+#include <sensor_msgs/Image.h>
 #include <sensor_msgs/JointState.h>
+#include <std_msgs/String.h>
 #include <std_srvs/Trigger.h>
 #include <tf2_eigen/tf2_eigen.h>
 #include <tf2_ros/transform_broadcaster.h>
 
 #include <atomic>
+#include <cstring>
 #include <deque>
 
 using namespace sep23;
 
 namespace {
+
+std::vector<Eigen::Vector3f> cloudPoints(const sensor_msgs::PointCloud2 &cloud) {
+    std::vector<Eigen::Vector3f> points;
+    points.reserve(static_cast<size_t>(cloud.width) * cloud.height);
+    sensor_msgs::PointCloud2ConstIterator<float> x(cloud, "x"), y(cloud, "y"), z(cloud, "z");
+    for (; x != x.end(); ++x, ++y, ++z) {
+        points.emplace_back(*x, *y, *z);
+    }
+    return points;
+}
+
+bool toBgr(const sensor_msgs::Image &image, cv::Mat &bgr) {
+    const int type = image.encoding == "mono8" ? CV_8UC1 : image.encoding == "bgr8" || image.encoding == "rgb8" ? CV_8UC3 : -1;
+    if (type < 0) {
+        return false;
+    }
+    const cv::Mat view(static_cast<int>(image.height), static_cast<int>(image.width), type, const_cast<uint8_t *>(image.data.data()), image.step);
+    if (image.encoding == "mono8") {
+        cv::cvtColor(view, bgr, cv::COLOR_GRAY2BGR);
+    } else if (image.encoding == "rgb8") {
+        cv::cvtColor(view, bgr, cv::COLOR_RGB2BGR);
+    } else {
+        bgr = view.clone();
+    }
+    return true;
+}
+
+sensor_msgs::Image toImage(const cv::Mat &m, const std_msgs::Header &header, const std::string &encoding) {
+    sensor_msgs::Image out;
+    out.header   = header;
+    out.height   = static_cast<uint32_t>(m.rows);
+    out.width    = static_cast<uint32_t>(m.cols);
+    out.encoding = encoding;
+    out.step     = static_cast<uint32_t>(m.cols * m.elemSize());
+    out.data.resize(static_cast<size_t>(out.step) * m.rows);
+    for (int r = 0; r < m.rows; ++r) {
+        std::memcpy(&out.data[static_cast<size_t>(r) * out.step], m.ptr(r), out.step);
+    }
+    return out;
+}
 
 struct PickConfig {
     std::string                          world_frame, vehicle_frame, arm_frame, camera_frame;
@@ -45,6 +91,7 @@ struct PickConfig {
     PlanSettings                         plan;
     double                               start_tolerance = 0.0;
     FollowSettings                       follow;
+    TrackSettings                        track;
     double                               loop_hz = 0.0, joint_state_timeout_s = 0.0;
     double                               stream_timeout_s = 0.0, spot_search_s = 0.0, repark_search_s = 0.0, snapshot_match = 0.0;
     int                                  retarget_attempts = 0, park_attempts = 0;
@@ -187,6 +234,7 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
     p.link_radius            = pick.number("collision/link_radius_m");
     p.link_step              = pick.number("collision/link_step_m");
     p.blade_step             = pick.number("collision/blade_step_m");
+    p.swing_band             = rad(pick.number("park/swing_band_deg"));
     c.speed                  = pick.number("park/speed_m_s");
     c.yaw_speed              = rad(pick.number("park/yaw_speed_deg_s"));
     pick.require(p.fine_step > 0.0 && p.fine_step <= p.coarse_step && p.fine_yaw > 0.0 && p.fine_yaw <= p.coarse_yaw,
@@ -195,6 +243,7 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
     pick.require(p.screen_count > 0 && p.screen_blade_stride > 0 && p.exact_count > 0 && p.transit_samples > 0 && p.refine_count > 0,
                  "park", "positive counts");
     pick.require(p.reach_cell > 0.0 && c.speed > 0.0 && c.yaw_speed > 0.0, "park", "positive reach_cell_m, speed_m_s and yaw_speed_deg_s");
+    pick.require(p.swing_band >= 0.0, "park/swing_band_deg", "not negative");
 
     PlanSettings &plan          = c.plan;
     plan.grasp_point_from_mount = p.grasp_point_from_mount;
@@ -202,7 +251,6 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
     plan.goal_budget_s          = pick.number("plan/goal_budget_s");
     plan.range                  = rad(pick.number("plan/range_deg"));
     plan.edge_step              = rad(pick.number("plan/edge_step_deg"));
-    p.edge_step                 = plan.edge_step;
     c.start_tolerance           = rad(pick.number("plan/start_tolerance_deg"));
     pick.require(plan.goal_budget_s > 0.0 && plan.budget_s >= plan.goal_budget_s && plan.edge_step > 0.0 && plan.range > 0.0,
                  "plan", "positive budgets, range and edge step, with budget_s at least goal_budget_s");
@@ -215,6 +263,15 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
     f.blocked_follow_fraction  = pick.number("follow/blocked_follow_fraction");
     f.blocked_strikes          = pick.whole("follow/blocked_strikes");
     pick.require(f.max_step > 0.0 && f.arrival_tolerance > 0.0 && f.blocked_strikes > 0, "follow", "positive step, tolerance and strikes");
+
+    TrackSettings &t = c.track;
+    t.depth_gate     = pick.number("track/depth_gate_m");
+    t.roi_radius     = pick.number("track/roi_radius_m");
+    t.min_points     = pick.whole("track/min_points");
+    t.max_points     = pick.whole("track/max_points");
+    t.ransac_px      = pick.number("track/ransac_px");
+    pick.require(t.depth_gate > 0.0 && t.roi_radius > 0.0 && t.ransac_px > 0.0 && t.min_points >= 3 && t.max_points > t.min_points,
+                 "track", "positive gate, radius and threshold, with max_points above a min_points of at least 3");
 }
 
 // Runs the pick after one start: survey, park, survey again from there, plan, follow, close the jaw.
@@ -227,10 +284,18 @@ public:
               follower_(c.follow),
               cloud_sub_(nh_, "cloud", 1),
               poses_sub_(nh_, "grasp_poses", 1),
-              sync_(cloud_sub_, poses_sub_, 5) {
+              sync_(cloud_sub_, poses_sub_, 5),
+              image_sub_(nh_, "image", 1),
+              track_sync_(cloud_sub_, image_sub_, 5),
+              tracker_(c.track, c.camera) {
         ros::NodeHandle pnh("~");
         sync_.registerCallback(&Pick::onFrame, this);
         cloud_sub_.registerCallback(&Pick::onCloudSeen, this);
+        track_sync_.registerCallback(&Pick::onTrackFrame, this);
+        view_sub_    = pnh.subscribe("view", 1, &Pick::onView, this);
+        debug_pub_   = nh_.advertise<sensor_msgs::Image>("stage3/debug_image", 1);
+        mask_pub_    = nh_.advertise<sensor_msgs::Image>("stage3/depth_mask", 1);
+        target_pub_  = nh_.advertise<geometry_msgs::PoseStamped>("stage3/target_pose", 1);
         joints_sub_  = nh_.subscribe("joint_states", 1, &Pick::onJoints, this);
         targets_pub_ = nh_.advertise<sensor_msgs::JointState>("driver/joint_targets", 1);
         close_jaw_   = nh_.serviceClient<std_srvs::Trigger>("driver/close_jaw");
@@ -263,6 +328,7 @@ public:
                 have_snapshot_                = false;
                 surveying_since_ = reparking_since_ = ros::Time();
                 run_started_                        = ros::Time::now();
+                map_pub_.publish(mapCloud(ObstacleMap(), Eigen::Isometry3d::Identity(), c_.world_frame));
                 apply(Event::START, "started");
             }
         }
@@ -284,6 +350,46 @@ private:
         frame_seen_ = ros::Time::now();
     }
 
+    // Stage 3: while the arm moves blind, follow the target in the image. Published only; the arm does not use it yet.
+    void onTrackFrame(const sensor_msgs::PointCloud2::ConstPtr &cloud, const sensor_msgs::Image::ConstPtr &image) {
+        std::lock_guard<std::mutex> lock(track_mutex_);
+        if (!tracker_.active()) {
+            return;
+        }
+        cv::Mat bgr;
+        if (cloud->header.frame_id != c_.camera_frame || !toBgr(*image, bgr)) {
+            ROS_WARN_THROTTLE(5.0, "[pick] stage 3 frame dropped: expected a bgr8, rgb8 or mono8 image with a cloud in %s", c_.camera_frame.c_str());
+            return;
+        }
+        cv::Mat gray;
+        cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
+        track_ = tracker_.update(gray, cloudPoints(*cloud));
+
+        geometry_msgs::PoseStamped pose;
+        pose.header             = image->header;
+        pose.header.frame_id    = c_.camera_frame;
+        pose.pose.position.x    = track_.target.x();
+        pose.pose.position.y    = track_.target.y();
+        pose.pose.position.z    = track_.target.z();
+        pose.pose.orientation.w = 1.0;
+        target_pub_.publish(pose);
+        // Drawn only for a viewer: Foxglove subscribes to what its panels show.
+        if (debug_pub_.getNumSubscribers() > 0) {
+            debug_pub_.publish(toImage(drawTrack(bgr, track_, view_.load()), image->header, "bgr8"));
+        }
+        if (mask_pub_.getNumSubscribers() > 0 && !track_.mask.empty()) {
+            mask_pub_.publish(toImage(track_.mask, image->header, "mono8"));
+        }
+    }
+
+    void onView(const std_msgs::String::ConstPtr &msg) {
+        if (msg->data == "ransac" || msg->data == "klt" || msg->data == "mask") {
+            view_ = msg->data == "ransac" ? TrackView::RANSAC : msg->data == "klt" ? TrackView::KLT : TrackView::MASK;
+        } else {
+            ROS_WARN("[pick] view %s is none of ransac, klt, mask", msg->data.c_str());
+        }
+    }
+
     void onFrame(const sensor_msgs::PointCloud2::ConstPtr &cloud, const geometry_msgs::PoseArray::ConstPtr &poses) {
         if (cloud->header.frame_id != c_.camera_frame || poses->header.frame_id != c_.camera_frame
             || static_cast<long>(cloud->width) * cloud->height != static_cast<long>(c_.camera.width) * c_.camera.height) {
@@ -297,11 +403,7 @@ private:
             return;
         }
         Frame frame;
-        frame.points.reserve(static_cast<size_t>(cloud->width) * cloud->height);
-        sensor_msgs::PointCloud2ConstIterator<float> x(*cloud, "x"), y(*cloud, "y"), z(*cloud, "z");
-        for (; x != x.end(); ++x, ++y, ++z) {
-            frame.points.emplace_back(*x, *y, *z);
-        }
+        frame.points = cloudPoints(*cloud);
         for (const geometry_msgs::Pose &p : poses->poses) {
             const Eigen::Matrix3d r = Eigen::Quaterniond(p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z).normalized().toRotationMatrix();
             frame.poses.push_back({Eigen::Vector3d(p.position.x, p.position.y, p.position.z), r.col(c_.bar_column), r.col(c_.approach_column)});
@@ -397,6 +499,9 @@ private:
         }
         if (next == State::COLLECT) {
             spot_phase_ = state_ == State::STREAM || state_ == State::RESURVEY || state_ == State::REPARK;
+            if (!spot_phase_) {
+                park_map_pub_.publish(mapCloud(ObstacleMap(), Eigen::Isometry3d::Identity(), c_.world_frame));
+            }
         }
         enter(next, message);
     }
@@ -407,8 +512,19 @@ private:
         state_                 = next;
         working_               = isWorking(next);
         entered_               = ros::Time::now();
+        if (next != State::GOTOGRASP && next != State::CLOSEJAW) {
+            std::lock_guard<std::mutex> lock(track_mutex_);
+            tracker_.stop();
+        }
         char         line[200];
         switch (next) {
+        case State::GOTOGRASP: {
+            // Stage 3 follows the chosen candidate from where the grasp look saw it.
+            std::lock_guard<std::mutex> lock(track_mutex_);
+            tracker_.start(scene_camera_to_arm_.inverse() * scene_.candidates[plan_.candidate].point);
+            track_ = TrackResult();
+            break;
+        }
         case State::COLLECT: {
             std::lock_guard<std::mutex> lock(sensor_mutex_);
             frames_.clear();
@@ -552,6 +668,9 @@ private:
         }
         const auto started = ros::WallTime::now();
         scene_             = processFrames(frames, c_.camera, c_.cloud);
+        if (!frames.empty()) {
+            scene_camera_to_arm_ = frames.back().camera_to_arm;
+        }
         scene_to_world_    = armToWorld();
         char took[32];
         std::snprintf(took, sizeof(took), " (%.2f s)", (ros::WallTime::now() - started).toSec());
@@ -656,9 +775,14 @@ private:
             targets_pub_.publish(msg);
         }
         switch (state) {
-        case Following::REACHED:
-            message = "reached the end of the path";
+        case Following::REACHED: {
+            std::lock_guard<std::mutex> lock(track_mutex_);
+            char                        line[120];
+            std::snprintf(line, sizeof(line), "; stage 3 saw the target move %.1f mm (%s)", 1000 * track_.offset.norm(),
+                          track_.ok ? "tracking" : "not tracking");
+            message = std::string("reached the end of the path") + line;
             return Event::REACHED;
+        }
         case Following::STALLED:
             releaseArm();
             message = "did not arrive within the arrival timeout, arm released";
@@ -823,6 +947,14 @@ private:
     message_filters::Subscriber<sensor_msgs::PointCloud2>                        cloud_sub_;
     message_filters::Subscriber<geometry_msgs::PoseArray>                        poses_sub_;
     message_filters::TimeSynchronizer<sensor_msgs::PointCloud2, geometry_msgs::PoseArray> sync_;
+    message_filters::Subscriber<sensor_msgs::Image>                              image_sub_;
+    message_filters::TimeSynchronizer<sensor_msgs::PointCloud2, sensor_msgs::Image> track_sync_;
+    ros::Subscriber                                                              view_sub_;
+    ros::Publisher                                                               debug_pub_, mask_pub_, target_pub_;
+    std::mutex                                                                   track_mutex_;
+    Tracker                                                                      tracker_;
+    TrackResult                                                                  track_;
+    std::atomic<TrackView>                                                       view_{TrackView::RANSAC};
     ros::Subscriber                   joints_sub_;
     ros::Publisher                    targets_pub_, state_pub_, park_map_pub_, map_pub_, grasp_pub_, path_pub_, body_pub_, hull_pub_;
     ros::ServiceClient                close_jaw_, standby_, home_;
@@ -849,6 +981,7 @@ private:
     Scene             scene_, snapshot_;
     Eigen::Isometry3d scene_to_world_ = Eigen::Isometry3d::Identity(), snapshot_to_world_ = Eigen::Isometry3d::Identity();
     Plan              plan_;
+    Eigen::Isometry3d scene_camera_to_arm_ = Eigen::Isometry3d::Identity();  // the newest frame of the look, for stage 3
     VehiclePose       drive_from_, drive_to_;
     int               drive_steps_ = 1, drive_step_ = 0;
     ros::Time         jaw_closed_at_, jaw_last_seen_, jaw_still_since_;

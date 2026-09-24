@@ -20,6 +20,7 @@
         <rosparam command="load" file="$(arg config)/pick.yaml"/>
         <param name="camera_fixed_in_world" value="$(eval bag != '')"/>
         <remap from="cloud" to="/pointcloud"/>
+        <remap from="image" to="/image"/>
         <remap from="grasp_poses" to="$(eval '/grasp_poses_by_pipeline' if vision else '/grasp_poses')"/>
     </node>
 

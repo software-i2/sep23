@@ -10,15 +10,16 @@ set(DEPS geometry_msgs message_filters roscpp sensor_msgs std_msgs std_srvs tf2_
 find_package(catkin REQUIRED COMPONENTS ${DEPS} message_generation)
 find_package(ompl REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc video calib3d)
 
 add_message_files(FILES PickState.msg)
 generate_messages(DEPENDENCIES std_msgs)
 catkin_package(CATKIN_DEPENDS ${DEPS} message_runtime)
 
-include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS} ${OMPL_INCLUDE_DIRS})
+include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIRS} ${OMPL_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 
-add_library(${PROJECT_NAME} src/arm.cpp src/bpl.cpp src/cloud.cpp src/collision.cpp src/follow.cpp src/fsm.cpp src/park.cpp src/plan.cpp)
-target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES} ${OMPL_LIBRARIES})
+add_library(${PROJECT_NAME} src/arm.cpp src/bpl.cpp src/cloud.cpp src/collision.cpp src/follow.cpp src/fsm.cpp src/park.cpp src/plan.cpp src/track.cpp)
+target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES} ${OMPL_LIBRARIES} ${OpenCV_LIBRARIES})
 
 foreach(node driver pick)
   add_executable(${node} nodes/${node}.cpp)

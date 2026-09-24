@@ -4,6 +4,7 @@
 #include <sep23/collision.h>
 
 #include <functional>
+#include <limits>
 
 namespace sep23 {
 
@@ -37,7 +38,8 @@ struct ParkSettings {
     double screen_budget_s = 0.0;
     int    screen_blade_stride = 1, exact_count = 0, transit_samples = 0;
     double reach_cell = 0.0;
-    double grasp_point_from_mount = 0.0, link_radius = 0.0, link_step = 0.0, blade_step = 0.0, edge_step = 0.0;
+    double grasp_point_from_mount = 0.0, link_radius = 0.0, link_step = 0.0, blade_step = 0.0;
+    double swing_band = 0.0;
 };
 
 enum class ParkDecision { MOVE, STAY, NOWHERE };
@@ -45,7 +47,8 @@ enum class ParkDecision { MOVE, STAY, NOWHERE };
 struct ParkChoice {
     ParkDecision decision = ParkDecision::NOWHERE;
     VehiclePose  move;              // relative to where the vehicle stands
-    int          held = 0, routes = 0;
+    int          held  = 0;
+    double       swing = 0.0;  // least largest joint move from home to a holding posture: a lower bound on the arm's move
     std::string  summary;
 };
 
@@ -65,13 +68,14 @@ private:
         int         admitted = 0;
     };
     struct Holds {
-        int held = 0, routes = 0;
+        int    held  = 0;
+        double swing = std::numeric_limits<double>::infinity();
     };
 
     int     admitted(const std::vector<GraspPose> &grasps, const VehiclePose &move) const;
     void    shortlist(const std::vector<GraspPose> &grasps, std::vector<Scored> &out) const;
     Holds   verify(const std::vector<GraspPose> &grasps, const VehiclePose &move, ObstacleGrid &grid, const Joints &home,
-                   size_t stride, bool routes) const;
+                   size_t stride) const;
     bool    transitClear(const VehiclePose &to, ObstacleGrid &grid, const Joints &home) const;
     Eigen::Isometry3d armMove(const VehiclePose &move) const;  // the arm frame after the move, in the arm frame now
 
