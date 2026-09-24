@@ -46,7 +46,7 @@ jaws:
 camera:
   frame: camera_link
   mount_xyz_m: [0.35, -0.05, -0.05]      # camera_mount in the vehicle frame
-  mount_rpy_deg: [0.0, 0.0, 0.0]
+  mount_rpy_deg: [0.0, 90.0, 0.0]
   optical_rpy_deg: [90.0, 0.0, -90.0]    # camera_link in camera_mount: x right, y up, looking down -z
   intrinsics: {width_px: 800, height_px: 600, fx_px: 479.2662, fy_px: 479.2662, cx_px: 397.9827, cy_px: 322.8405}
 
