@@ -252,6 +252,39 @@ TEST(Park, ReachMapNeverRefusesWhatTheIkSolves) {
     EXPECT_GT(solvable, 500);
 }
 
+// A still face tilted away from the camera, then its near half hidden: the corners left sit deeper, so a median depth over
+// them would move the target ~25 mm. Each corner's own depth change is zero, and so must the target's be.
+TEST(Track, HidingPartOfATiltedFaceLeavesTheTargetStill) {
+    CameraModel camera{320, 240, 250.0, 250.0, 160.0, 120.0};
+    TrackSettings s{0.05, 0.25, 15, 150, 2.5, 0.0};
+    cv::Mat       face(camera.height, camera.width, CV_8U);
+    cv::randu(face, 0, 255);
+    cv::GaussianBlur(face, face, cv::Size(0, 0), 2.0);
+    cv::normalize(face, face, 0, 255, cv::NORM_MINMAX);
+    const auto depth = [](int u) { return 0.40 + 0.0005 * (u - 160); };
+    std::vector<Eigen::Vector3f> points(static_cast<size_t>(camera.width) * camera.height);
+    const auto look = [&](bool hide) {
+        for (int v = 0; v < camera.height; ++v) {
+            for (int u = 0; u < camera.width; ++u) {
+                const double d = depth(u);
+                points[static_cast<size_t>(v) * camera.width + u] =
+                        hide && u < 100 ? Eigen::Vector3f::Constant(NAN)
+                                        : Eigen::Vector3f(static_cast<float>((u - camera.cx) * d / camera.fx),
+                                                          static_cast<float>(-(v - camera.cy) * d / camera.fy), static_cast<float>(-d));
+            }
+        }
+    };
+    Tracker tracker(s, camera);
+    tracker.start(Eigen::Vector3d((80.0 - camera.cx) * depth(80) / camera.fx, 0.0, -depth(80)));
+    TrackResult r;
+    for (int k = 0; k < 6; ++k) {
+        look(k >= 3);
+        r = tracker.update(face, points);
+        ASSERT_TRUE(r.ok) << "frame " << k;
+    }
+    EXPECT_LT(r.offset.norm(), 0.002) << "the target moved " << 1000 * r.offset.transpose() << " mm with nothing moving";
+}
+
 // A mine face drifting across the image, an arm patch inside the depth gate moving the other way, a seabed behind the gate.
 TEST(Track, FollowsTheMineThroughAnArmInsideTheGate) {
     CameraModel camera{320, 240, 250.0, 250.0, 160.0, 120.0};
