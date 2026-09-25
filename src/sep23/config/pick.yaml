@@ -91,4 +91,5 @@ track:                                   # following the target in the image whi
   min_points: 15                         # fewer consensus corners than this and corners are found again
   max_points: 150
   ransac_px: 2.5                         # 2D reprojection threshold: floating particles and arm edges fall outside it
-  min_face_visible: 0.3                  # the face more than 40% blocked: tracking and steering stop, the arm finishes open loop
+  min_face_visible: 0.3                  # the face more than 70% blocked: tracking and steering stop, the arm finishes open loop
+  ema_alpha: 0.3                         # each frame's weight in the tracked offset steering reads; ~0.3 s lag at 10 Hz, 1 is raw

@@ -285,9 +285,11 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
     t.max_points     = pick.whole("track/max_points");
     t.ransac_px      = pick.number("track/ransac_px");
     t.min_face       = pick.number("track/min_face_visible");
+    t.ema_alpha      = pick.number("track/ema_alpha");
     pick.require(t.depth_gate > 0.0 && t.roi_radius > 0.0 && t.ransac_px > 0.0 && t.min_points >= 3 && t.max_points > t.min_points,
                  "track", "positive gate, radius and threshold, with max_points above a min_points of at least 3");
     pick.require(t.min_face >= 0.0 && t.min_face < 1.0, "track/min_face_visible", "at least 0 and below 1");
+    pick.require(t.ema_alpha > 0.0 && t.ema_alpha <= 1.0, "track/ema_alpha", "above 0 and at most 1");
 }
 
 // Runs the pick after one start: survey, park, survey again from there, plan, follow, close the jaw.
