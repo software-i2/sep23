@@ -121,18 +121,19 @@ Verdict Collision::check(const Joints &q) {
     return Verdict::CLEAR;
 }
 
-bool Collision::segmentClear(const Joints &a, const Joints &b, double step) {
+Verdict Collision::sweep(const Joints &a, const Joints &b, double step) {
     const int steps = std::max(1, static_cast<int>(std::ceil(largestMove(a, b) / step)));
     for (int n = 1; n < steps; ++n) {
         Joints q;
         for (int j = 0; j < JOINT_COUNT; ++j) {
             q[j] = a[j] + (b[j] - a[j]) * n / steps;
         }
-        if (check(q) != Verdict::CLEAR) {
-            return false;
+        const Verdict v = check(q);
+        if (v != Verdict::CLEAR) {
+            return v;
         }
     }
-    return true;
+    return Verdict::CLEAR;
 }
 
 }  // namespace sep23

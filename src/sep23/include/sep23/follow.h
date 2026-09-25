@@ -27,6 +27,14 @@ public:
     Following tick(double now_s, Joints &target, bool &send);
 
     int    blockedJoint() const { return blocked_joint_; }
+    // The waypoint the next tick would send; false when none is left to send.
+    bool upcoming(Joints &q) const {
+        if (state_ != Following::SENDING) {
+            return false;
+        }
+        q = waypoints_[next_];
+        return true;
+    }
 
 private:
     bool arrived() const;

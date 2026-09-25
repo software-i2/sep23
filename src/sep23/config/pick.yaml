@@ -9,13 +9,14 @@ task:
   repark_search_s: 120.0                 # give up reparking after this long without the vehicle moving
   retarget_attempts: 10                  # looks from one parking spot
   park_attempts: 3                       # parking spots actually driven to
-  snapshot_match_m: 0.05                 # a pre-drive candidate this close to a fresh one is the same handle
 
 jaw:
   settle_tolerance_m: 0.0001
   settle_time_s: 1.0
   grabbed_margin_m: 0.0005               # settled this far short of closed means something is held
   timeout_s: 5.0
+  catch_reach_m: 0.070                   # pass: the handle ends no farther than this from the mount along the approach
+  catch_off_centre_m: 0.010              # and this close to the jaw's centre line; closing shoves it, so not dead centre
 
 cloud:
   frames: 5                              # frames per look when either averaging is on, otherwise 1
@@ -31,9 +32,9 @@ cloud:
   obstacle_averaging: true
   flying_pixel: {depth_tolerance_m: 0.003, min_agreeing_neighbours: 5, slope_window_px: 5}
   occupancy: {min_points_per_voxel: 2, free_space_tolerance_m: 0.005, max_surface_tilt_deg: 85.0}
-  handle_radius_m: 0.005                 # voxels this close to a grasp pose are handle, not obstacle
+  handle_radius_m: 0.01                  # voxels this close to a grasp pose are handle, not obstacle
   bar_gap_m: 0.015                       # consecutive poses closer than this lie on one bar
-  corridor: {length_m: 0.04, radius_m: 0.02}
+  corridor: {length_m: 0.05, radius_m: 0.01}
   consensus: {min_frames: 2, match_m: 0.010, max_axis_deg: 20.0, outlier_m: 0.006, max_spread_m: 0.003, duplicate_m: 0.005}
   vote: {min_frames: 2, radius_voxels: 1}
 
@@ -41,7 +42,7 @@ collision:
   link_radius_m: 0.020
   link_step_m: 0.002
   blade_step_m: 0.0025
-  grasp_point_from_mount_m: 0.060        # 0.040 is the throat, 0.0969 the tips
+  grasp_point_from_mount_m: 0.050        # 0.040 is the throat, 0.0969 the tips
 
 park:
   box_xy_m: 1.0
@@ -79,13 +80,15 @@ follow:
   blocked_follow_fraction: 0.2           # moving less than this share of the command is a strike
   blocked_strikes: 10
 
-track:                                   # stage 3: following the target in the image while the arm moves blind
-  enabled: false                         # off: no image subscription, no tracking, the pick runs as without stage 3
+track:                                   # following the target in the image while the arm moves blind
+  enabled: true                          # false: no image subscription, the arm moves open loop
   steer: true                            # move the goal to where the tracker puts the target; false only watches
   retarget_m: 0.01                       # retarget once the tracked target is this far from where the arm is heading
   max_shift_m: 0.10                      # a tracked shift past this is taken as a tracking failure and ignored
+  replan_budget_s: 0.2                   # no straight way to the shifted goal: plan around it this long, the arm waiting
   depth_gate_m: 0.05                     # either side of the target's depth; the seabed sits ~0.10 m behind the mine face
   roi_radius_m: 0.25                     # from the target, so a tilted seabed's slice of the gate stays out
   min_points: 15                         # fewer consensus corners than this and corners are found again
   max_points: 150
   ransac_px: 2.5                         # 2D reprojection threshold: floating particles and arm edges fall outside it
+  min_face_visible: 0.3                  # the face more than 40% blocked: tracking and steering stop, the arm finishes open loop

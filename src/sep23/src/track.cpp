@@ -12,19 +12,14 @@
 namespace sep23 {
 namespace {
 
-double median(std::vector<double> v) {
-    std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
-    return v[v.size() / 2];
-}
-
 bool finite(const Eigen::Vector3f &p) { return std::isfinite(p.x()) && std::isfinite(p.y()) && std::isfinite(p.z()) && p.z() < 0.0f; }
 
 }  // namespace
 
 void Tracker::start(const Eigen::Vector3d &target) {
-    active_ = true, seeded_ = calibrated_ = false;
+    active_ = true, seeded_ = calibrated_ = covered_ = false;
     start_target_ = target_ = target;
-    target_px_              = project(target);
+    target_px_ = start_px_  = project(target);
     points_.clear();
 }
 
@@ -82,20 +77,28 @@ void Tracker::seed(const cv::Mat &gray, const cv::Mat &mask) {
 
 TrackResult Tracker::update(const cv::Mat &gray, const std::vector<Eigen::Vector3f> &points) {
     TrackResult r;
-    r.target_px = target_px_, r.target = target_, r.offset = target_ - start_target_;
+    r.target_px = target_px_, r.start_px = start_px_, r.target = target_, r.offset = target_ - start_target_;
     if (!active_ || points.size() != static_cast<size_t>(camera_.width) * camera_.height || gray.cols != camera_.width
         || gray.rows != camera_.height) {
         return r;
     }
-    r.mask = gateMask(points);
+    r.mask            = gateMask(points);
+    const double area = cv::countNonZero(r.mask);
     if (!seeded_) {
         seed(gray, r.mask);
         if (points_.size() < 3) {
             points_.clear();
             return r;  // nothing textured at the target's depth yet; try the next frame
         }
-        previous_ = gray.clone();
+        previous_      = gray.clone();
+        face_at_start_ = area;
         seeded_ = r.ok = r.reseeded = true;
+        return r;
+    }
+    // With most of the face hidden, the few corners left, far from the target, swing it wildly: stop rather than follow them.
+    r.face = area / face_at_start_;
+    if (covered_ || r.face < s_.min_face) {
+        covered_ = r.covered = true;
         return r;
     }
 
@@ -130,17 +133,22 @@ TrackResult Tracker::update(const cv::Mat &gray, const std::vector<Eigen::Vector
             const Eigen::Vector2d was = target_px_;
             target_px_ = {a.at<double>(0, 0) * was.x() + a.at<double>(0, 1) * was.y() + a.at<double>(0, 2),
                           a.at<double>(1, 0) * was.x() + a.at<double>(1, 1) * was.y() + a.at<double>(1, 2)};
+            r.moved_px = target_px_ - was;
+            r.rotation = std::atan2(a.at<double>(1, 0), a.at<double>(0, 0));
+            r.scale    = std::hypot(a.at<double>(0, 0), a.at<double>(1, 0));
         }
     }
     r.inlier.resize(r.to.size(), 0);
     const std::vector<double> depths = depthsAt(kept, points);
     if (kept.size() >= 3 && !depths.empty()) {
         // Taken from the first consensus rather than the seeds, so an arm already inside the gate cannot bias it.
+        r.depth = median(depths);
         if (!calibrated_) {
-            target_above_ = -target_.z() - median(depths);
+            target_above_ = -target_.z() - r.depth;
             calibrated_   = true;
         }
-        target_ = unproject(target_px_, median(depths) + target_above_);
+        r.proud = target_above_;
+        target_ = unproject(target_px_, r.depth + target_above_);
         r.ok    = true;
     }
     points_ = kept;
@@ -153,9 +161,10 @@ TrackResult Tracker::update(const cv::Mat &gray, const std::vector<Eigen::Vector
     return r;
 }
 
-cv::Mat drawTrack(const cv::Mat &bgr, const TrackResult &r, TrackView view) {
+cv::Mat drawTrack(const cv::Mat &bgr, const TrackResult &r, TrackView view, const Eigen::Vector3d &aim, const Eigen::Vector2d &aim_px,
+                  const std::string &steering) {
     cv::Mat out = bgr.clone();
-    const cv::Scalar green(60, 200, 60), red(40, 40, 230), amber(0, 190, 255), cyan(230, 220, 40);
+    const cv::Scalar green(60, 200, 60), red(40, 40, 230), amber(0, 190, 255), cyan(230, 220, 40), magenta(230, 60, 230);
     if (view == TrackView::MASK && !r.mask.empty()) {
         cv::Mat dim = out * 0.35, tint(out.size(), out.type(), green);
         cv::addWeighted(out, 0.75, tint, 0.25, 0.0, tint);
@@ -170,15 +179,41 @@ cv::Mat drawTrack(const cv::Mat &bgr, const TrackResult &r, TrackView view) {
             cv::circle(out, r.to[i], 3, r.inlier[i] ? green : red, -1, cv::LINE_AA);
         }
     }
-    const cv::Point c(static_cast<int>(std::lround(r.target_px.x())), static_cast<int>(std::lround(r.target_px.y())));
-    cv::circle(out, c, 8, r.ok ? cyan : red, 2, cv::LINE_AA);
+    // Every view: where tracking started (ring), the target now (cross) and the way between; with steering, where the arm aims.
+    const auto      px = [](const Eigen::Vector2d &p) { return cv::Point(static_cast<int>(std::lround(p.x())), static_cast<int>(std::lround(p.y()))); };
+    const cv::Point c = px(r.target_px), s = px(r.start_px);
+    const cv::Scalar mark = r.covered ? red : r.ok ? cyan : amber;
+    cv::circle(out, s, 10, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+    cv::arrowedLine(out, s, c, mark, 2, cv::LINE_AA, 0, 0.2);
+    cv::drawMarker(out, c, mark, cv::MARKER_CROSS, 24, 2, cv::LINE_AA);
+    cv::putText(out, "target", c + cv::Point(10, -10), cv::FONT_HERSHEY_SIMPLEX, 0.5, mark, 1, cv::LINE_AA);
+    if (!steering.empty()) {
+        const cv::Point a = px(aim_px);
+        cv::line(out, a, c, magenta, 1, cv::LINE_AA);
+        cv::drawMarker(out, a, magenta, cv::MARKER_DIAMOND, 18, 2, cv::LINE_AA);
+        cv::putText(out, "aim", a + cv::Point(10, 14), cv::FONT_HERSHEY_SIMPLEX, 0.5, magenta, 1, cv::LINE_AA);
+    }
+
+    // Text: only what to act on. Markers already label target/aim, so no legend.
+    std::vector<std::string> lines;
+    char                     line[200];
+    if (!steering.empty()) {
+        const Eigen::Vector3d gap = 1000 * (r.target - aim);
+        std::snprintf(line, sizeof(line), "target-aim %+.0f %+.0f %+.0f mm (%.0f)", gap.x(), gap.y(), gap.z(), gap.norm());
+        lines.push_back(line);
+    }
     const size_t inliers = static_cast<size_t>(std::count(r.inlier.begin(), r.inlier.end(), 1));
-    char         line[160];
-    std::snprintf(line, sizeof(line), "%s  %zu/%zu inliers, %zu lost%s  offset %+.1f %+.1f %+.1f mm",
-                  view == TrackView::KLT ? "klt" : view == TrackView::RANSAC ? "ransac" : "mask", inliers, r.to.size(), r.lost,
-                  r.reseeded ? ", reseeded" : "", 1000 * r.offset.x(), 1000 * r.offset.y(), 1000 * r.offset.z());
-    cv::putText(out, line, cv::Point(12, 26), cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 0), 4, cv::LINE_AA);
-    cv::putText(out, line, cv::Point(12, 26), cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+    std::snprintf(line, sizeof(line), "moved %+.0f %+.0f %+.0f mm  %zu/%zu%s", 1000 * r.offset.x(), 1000 * r.offset.y(), 1000 * r.offset.z(),
+                  inliers, r.to.size(), r.covered ? "  COVERED" : r.ok ? "" : r.to.empty() ? "  seeding" : "  held");
+    lines.push_back(line);
+    if (!steering.empty()) {
+        lines.push_back(steering);
+    }
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const cv::Point at(12, 26 + 24 * static_cast<int>(i));
+        cv::putText(out, lines[i], at, cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(0, 0, 0), 4, cv::LINE_AA);
+        cv::putText(out, lines[i], at, cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+    }
     return out;
 }
 

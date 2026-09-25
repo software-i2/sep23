@@ -102,6 +102,12 @@ public:
     double           lower(int joint) const { return lower_[joint]; }
     double           upper(int joint) const { return upper_[joint]; }
     bool             withinLimits(const Joints &q) const;
+    Joints           clamped(Joints q) const {  // the nearest posture inside the limits
+        for (int j = 0; j < JOINT_COUNT; ++j) {
+            q[j] = std::min(std::max(q[j], lower_[j]), upper_[j]);
+        }
+        return q;
+    }
 
     ArmPoints points(const Joints &q) const;
     JawAxes   axes(const Joints &q) const;
@@ -118,8 +124,11 @@ public:
     bool rollsAcrossBar(const Joints &q, const Eigen::Vector3d &bar, double rolls[2]) const;
     // `p` in the jaw at q: along the approach from the mount, along the hinge, along the closing line.
     Eigen::Vector3d inJaw(const Joints &q, const Eigen::Vector3d &p) const;
-    // Whether a point in jaw coordinates lies between the open blades: past the throat, short of the tips, within a blade's width.
-    bool betweenBlades(const Eigen::Vector3d &j) const;
+    // Whether the jaw caught a point in jaw coordinates: in front of the mount no farther than `reach`, and no farther than
+    // `off_centre` from the jaw's centre line. Loose on purpose: closing shoves the handle about.
+    static bool caught(const Eigen::Vector3d &j, double reach, double off_centre) {
+        return j.x() >= 0.0 && j.x() <= reach && j.tail<2>().norm() <= off_centre;
+    }
 
 private:
     double upperLength() const { return std::hypot(config_.geometry.upper_x, config_.geometry.upper_z); }

@@ -326,12 +326,12 @@ bool nearestOnBar(const Eigen::Vector3d &anchor, const Eigen::Vector3d &directio
     return found;
 }
 
+}  // namespace
+
 double median(std::vector<double> v) {
     std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
     return v[v.size() / 2];
 }
-
-}  // namespace
 
 std::vector<GraspPose> agreeOnSpots(const std::vector<std::vector<GraspPose>> &frames, const CloudSettings &s,
                                     std::string &summary) {
@@ -404,17 +404,11 @@ std::vector<GraspPose> agreeOnSpots(const std::vector<std::vector<GraspPose>> &f
     return spots;
 }
 
-Eigen::Vector3d nearestOnHandle(const std::vector<Eigen::Vector3d> &points, double bar_gap, const Eigen::Vector3d &p) {
-    Eigen::Vector3d best = points.front();
-    for (size_t i = 0; i < points.size(); ++i) {
-        Eigen::Vector3d near = points[i];
-        if (i + 1 < points.size()) {
-            const Eigen::Vector3d ab     = points[i + 1] - points[i];
-            const double          length = ab.norm();
-            if (length > kShortest && length <= bar_gap) {
-                near += std::min(std::max((p - points[i]).dot(ab) / (length * length), 0.0), 1.0) * ab;
-            }
-        }
+Eigen::Vector3d nearestOnHandle(const std::vector<GraspPose> &poses, double half_length, const Eigen::Vector3d &p) {
+    Eigen::Vector3d best = poses.front().point;
+    for (const GraspPose &g : poses) {
+        const Eigen::Vector3d along = unit(g.bar);
+        const Eigen::Vector3d near  = g.point + std::min(std::max((p - g.point).dot(along), -half_length), half_length) * along;
         if ((near - p).squaredNorm() < (best - p).squaredNorm()) {
             best = near;
         }

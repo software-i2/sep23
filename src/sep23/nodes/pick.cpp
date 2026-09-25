@@ -10,13 +10,13 @@
 #include <sep23/track.h>
 
 #include <geometry_msgs/PoseArray.h>
-#include <geometry_msgs/PoseStamped.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/time_synchronizer.h>
 #include <ompl/util/Console.h>
 #include <ompl/util/RandomNumbers.h>
 #include <opencv2/imgproc.hpp>
 #include <ros/ros.h>
+#include <sensor_msgs/CameraInfo.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/JointState.h>
 #include <std_msgs/String.h>
@@ -28,6 +28,7 @@
 #include <atomic>
 #include <cstring>
 #include <deque>
+#include <map>
 
 using namespace sep23;
 
@@ -82,7 +83,7 @@ struct PickConfig {
     CameraModel                          camera;
     Eigen::Isometry3d                    camera_to_vehicle = Eigen::Isometry3d::Identity();
     Eigen::Isometry3d                    arm_to_vehicle    = Eigen::Isometry3d::Identity();
-    bool                                 camera_fixed_in_world = false;  // a replayed bag saw the scene from one place
+    bool                                 synthetic = false;  // the SYNTHETIC camera: fixed in the world
     Hull                                 hull;
     CloudSettings                        cloud;
     int                                  frames_needed = 1, approach_column = 0, bar_column = 1;
@@ -94,11 +95,12 @@ struct PickConfig {
     FollowSettings                       follow;
     TrackSettings                        track;
     bool                                 track_enabled = false, track_steer = false;
-    double                               track_retarget = 0.0, track_max_shift = 0.0;
+    double                               track_retarget = 0.0, track_max_shift = 0.0, track_replan_s = 0.0;
     double                               loop_hz = 0.0, joint_state_timeout_s = 0.0;
-    double                               stream_timeout_s = 0.0, spot_search_s = 0.0, repark_search_s = 0.0, snapshot_match = 0.0;
+    double                               stream_timeout_s = 0.0, spot_search_s = 0.0, repark_search_s = 0.0;
     int                                  retarget_attempts = 0, park_attempts = 0;
     double                               jaw_settle_tolerance = 0.0, jaw_settle_time_s = 0.0, jaw_grabbed_margin = 0.0, jaw_timeout_s = 0.0;
+    double                               catch_reach = 0.0, catch_off_centre = 0.0;
 };
 
 Eigen::Isometry3d fromXyzRpy(const std::vector<double> &xyz, const std::vector<double> &rpy_deg) {
@@ -159,17 +161,18 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
 
     c.loop_hz               = pick.number("loop_hz");
     c.joint_state_timeout_s = pick.number("joint_state_timeout_s");
-    c.camera_fixed_in_world = pick.flag("camera_fixed_in_world");
+    c.synthetic             = pick.flag("synthetic");
     c.stream_timeout_s      = pick.number("task/stream_timeout_s");
     c.spot_search_s         = pick.number("task/spot_search_s");
     c.repark_search_s       = pick.number("task/repark_search_s");
     c.retarget_attempts     = pick.whole("task/retarget_attempts");
     c.park_attempts         = pick.whole("task/park_attempts");
-    c.snapshot_match        = pick.number("task/snapshot_match_m");
     c.jaw_settle_tolerance  = pick.number("jaw/settle_tolerance_m");
     c.jaw_settle_time_s     = pick.number("jaw/settle_time_s");
     c.jaw_grabbed_margin    = pick.number("jaw/grabbed_margin_m");
     c.jaw_timeout_s         = pick.number("jaw/timeout_s");
+    c.catch_reach           = pick.number("jaw/catch_reach_m");
+    c.catch_off_centre      = pick.number("jaw/catch_off_centre_m");
     pick.require(c.loop_hz > 0.0 && c.joint_state_timeout_s > 0.0, "loop_hz", "positive, with a positive joint_state_timeout_s");
     pick.require(c.retarget_attempts > 0 && c.park_attempts > 0, "task", "positive retarget_attempts and park_attempts");
     pick.require(c.jaw_timeout_s > c.jaw_settle_time_s, "jaw/timeout_s", "longer than jaw/settle_time_s");
@@ -272,6 +275,8 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
     c.track_steer     = pick.flag("track/steer");
     c.track_retarget    = pick.number("track/retarget_m");
     c.track_max_shift = pick.number("track/max_shift_m");
+    c.track_replan_s  = pick.number("track/replan_budget_s");
+    pick.require(c.track_replan_s > 0.0, "track/replan_budget_s", "positive");
     pick.require(c.track_retarget > 0.0 && c.track_max_shift > c.track_retarget, "track/max_shift_m", "above a positive retarget_m");
     TrackSettings &t = c.track;
     t.depth_gate     = pick.number("track/depth_gate_m");
@@ -279,8 +284,10 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
     t.min_points     = pick.whole("track/min_points");
     t.max_points     = pick.whole("track/max_points");
     t.ransac_px      = pick.number("track/ransac_px");
+    t.min_face       = pick.number("track/min_face_visible");
     pick.require(t.depth_gate > 0.0 && t.roi_radius > 0.0 && t.ransac_px > 0.0 && t.min_points >= 3 && t.max_points > t.min_points,
                  "track", "positive gate, radius and threshold, with max_points above a min_points of at least 3");
+    pick.require(t.min_face >= 0.0 && t.min_face < 1.0, "track/min_face_visible", "at least 0 and below 1");
 }
 
 // Runs the pick after one start: survey, park, survey again from there, plan, follow, close the jaw.
@@ -299,14 +306,14 @@ public:
         ros::NodeHandle pnh("~");
         sync_.registerCallback(&Pick::onFrame, this);
         cloud_sub_.registerCallback(&Pick::onCloudSeen, this);
-        // Stage 3 off: no image subscription and no /tracker/* topics.
+        
         if (c_.track_enabled) {
             image_sub_.subscribe(nh_, "image", 1);
             track_sync_.connectInput(cloud_sub_, image_sub_);
             track_sync_.registerCallback(&Pick::onTrackFrame, this);
             view_sub_   = nh_.subscribe("tracker/view", 1, &Pick::onView, this);
             debug_pub_  = nh_.advertise<sensor_msgs::Image>("tracker/debug_image", 1);
-            target_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("tracker/target_pose", 1);
+            info_pub_   = nh_.advertise<sensor_msgs::CameraInfo>("tracker/camera_info", 1);  // Foxglove pairs it with the image
             shift_pub_  = nh_.advertise<visualization_msgs::MarkerArray>("tracker/target_shift", 1, true);
         }
         joints_sub_  = nh_.subscribe("joint_states", 1, &Pick::onJoints, this);
@@ -319,15 +326,15 @@ public:
         map_pub_     = pnh.advertise<sensor_msgs::PointCloud2>("pick_map", 1, true);
         grasp_pub_   = pnh.advertise<visualization_msgs::MarkerArray>("grasps", 1, true);
         path_pub_    = pnh.advertise<visualization_msgs::Marker>("path", 1, true);
+        handle_pub_  = pnh.advertise<visualization_msgs::Marker>("handle_check", 1, true);
         body_pub_    = pnh.advertise<visualization_msgs::MarkerArray>("body", 1);
         hull_pub_    = pnh.advertise<visualization_msgs::Marker>("hull", 1, true);
         hull_pub_.publish(hullMarker(c_.hull, c_.arm_frame));
         services_ = {pnh.advertiseService("start", &Pick::onStart, this), pnh.advertiseService("stop", &Pick::onStop, this),
                      pnh.advertiseService("reset", &Pick::onReset, this)};
         tf_timer_ = nh_.createTimer(ros::Duration(1.0 / c_.loop_hz), [this](const ros::TimerEvent &) { broadcastVehicle(); });
-        // A replayed bag's camera stayed where it recorded, so the URDF leaves it off the vehicle and it is pinned here,
-        // where the pick already places bag frames: camera_to_vehicle with the vehicle at the origin.
-        if (c_.camera_fixed_in_world) {
+        // The synthetic camera stays put while the vehicle moves, so the URDF leaves it off the vehicle and it is pinned here.
+        if (c_.synthetic) {
             geometry_msgs::TransformStamped t = tf2::eigenToTransform(c_.camera_to_vehicle);
             t.header.stamp    = ros::Time::now();
             t.header.frame_id = c_.world_frame;
@@ -350,12 +357,13 @@ public:
                 ROS_WARN("[pick] start ignored: already in %s", stateName(state_));
             } else {
                 park_attempt_ = look_attempt_ = 0;
-                grabbed_ = on_handle_ = have_snapshot_ = false;
+                grabbed_ = on_handle_ = false;
                 surveying_since_ = reparking_since_ = ros::Time();
                 run_started_                        = ros::Time::now();
                 map_pub_.publish(mapCloud(ObstacleMap(), Eigen::Isometry3d::Identity(), c_.world_frame));
                 clearTrails();
-                apply(Event::START, "started");
+                ros::param::get("~track/steer", c_.track_steer);  // scripts/soak.sh sets it
+                apply(Event::START, c_.track_steer ? "started, steering" : "started, not steering");
             }
         }
         std::string message;
@@ -376,30 +384,34 @@ private:
         frame_seen_ = ros::Time::now();
     }
 
-    // Stage 3: while the arm moves blind, follow the target in the image; with track/steer, steer() moves the goal with it.
+    // while the arm moves blind, follow the target in the image; with track/steer, steer() moves the goal with it.
     void onTrackFrame(const sensor_msgs::PointCloud2::ConstPtr &cloud, const sensor_msgs::Image::ConstPtr &image) {
         std::lock_guard<std::mutex> lock(track_mutex_);
-        if (!tracker_.active()) {
+        const bool viewer = debug_pub_.getNumSubscribers() > 0;  // Foxglove subscribes to what its panels show
+        if (!tracker_.active() && !viewer) {
             return;
         }
         cv::Mat bgr;
         if (cloud->header.frame_id != c_.camera_frame || !toBgr(*image, bgr)) {
-            ROS_WARN_THROTTLE(5.0, "[pick] stage 3 frame dropped: expected a bgr8, rgb8 or mono8 image with a cloud in %s", c_.camera_frame.c_str());
+            ROS_WARN_THROTTLE(5.0, "[pick] frame dropped: expected a bgr8, rgb8 or mono8 image with a cloud in %s", c_.camera_frame.c_str());
+            return;
+        }
+        if (!tracker_.active()) {  // nothing is tracked between blind motions: say so rather than show a bare camera feed
+            const std::string idle = "idle";
+            cv::putText(bgr, idle, cv::Point(12, 26), cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(0, 0, 0), 4, cv::LINE_AA);
+            cv::putText(bgr, idle, cv::Point(12, 26), cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+            debug_pub_.publish(toImage(bgr, image->header, "bgr8"));
             return;
         }
         cv::Mat gray;
         cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
-        track_ = tracker_.update(gray, cloudPoints(*cloud));
+        const bool was_covered = track_.covered;
+        track_                 = tracker_.update(gray, cloudPoints(*cloud));
+        if (track_.covered && !was_covered) {
+            ROS_WARN("[pick] only %.0f%% of the mine face is visible: tracking stopped, the arm finishes open loop", 100 * track_.face);
+        }
 
-        geometry_msgs::PoseStamped pose;
-        pose.header             = image->header;
-        pose.header.frame_id    = c_.camera_frame;
-        pose.pose.position.x    = track_.target.x();
-        pose.pose.position.y    = track_.target.y();
-        pose.pose.position.z    = track_.target.z();
-        pose.pose.orientation.w = 1.0;
-        target_pub_.publish(pose);
-        // From where the arm is aiming to where stage 3 now puts the target: the correction a closed loop would make.
+        // From where the arm is aiming to where tracker puts the target: the correction a closed loop would make.
         trail_.push_back(track_.target);
         visualization_msgs::Marker shift = marker(c_.camera_frame, "shift", visualization_msgs::Marker::ARROW, 1.0f, 0.3f, 0.9f, 1.0f, 0.003);
         shift.scale.y = 0.007, shift.scale.z = 0.01;  // shaft and head width, head length
@@ -413,9 +425,18 @@ private:
         visualization_msgs::MarkerArray markers;
         markers.markers = {shift, trail, ball};
         shift_pub_.publish(markers);
-        // Drawn only for a viewer: Foxglove subscribes to what its panels show.
-        if (debug_pub_.getNumSubscribers() > 0) {
-            debug_pub_.publish(toImage(drawTrack(bgr, track_, view_.load()), image->header, "bgr8"));
+        if (viewer) {
+            // Where the arm aims: the planned target moved by the shift steering last took, in camera_link.
+            const Eigen::Vector3d aim = track_.target - track_.offset + scene_camera_to_arm_.linear().transpose() * steer_aim_;
+            debug_pub_.publish(toImage(drawTrack(bgr, track_, view_.load(), aim, tracker_.project(aim), c_.track_steer ? steer_note_ : ""),
+                                       image->header, "bgr8"));
+            sensor_msgs::CameraInfo info;
+            info.header = image->header;
+            info.width = c_.camera.width, info.height = c_.camera.height;
+            info.K = {c_.camera.fx, 0.0, c_.camera.cx, 0.0, c_.camera.fy, c_.camera.cy, 0.0, 0.0, 1.0};
+            info.R = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+            info.P = {c_.camera.fx, 0.0, c_.camera.cx, 0.0, 0.0, c_.camera.fy, c_.camera.cy, 0.0, 0.0, 0.0, 1.0, 0.0};
+            info_pub_.publish(info);
         }
     }
 
@@ -446,7 +467,7 @@ private:
             frame.poses.push_back({Eigen::Vector3d(p.position.x, p.position.y, p.position.z), r.col(c_.bar_column), r.col(c_.approach_column)});
         }
         const Eigen::Isometry3d vehicle_to_world = toIsometry(vehicle());
-        const Eigen::Isometry3d camera_to_world  = c_.camera_fixed_in_world ? c_.camera_to_vehicle : vehicle_to_world * c_.camera_to_vehicle;
+        const Eigen::Isometry3d camera_to_world  = c_.synthetic ? c_.camera_to_vehicle : vehicle_to_world * c_.camera_to_vehicle;
         frame.camera_to_arm = (vehicle_to_world * c_.arm_to_vehicle).inverse() * camera_to_world;
 
         std::lock_guard<std::mutex> lock(sensor_mutex_);
@@ -560,7 +581,7 @@ private:
                 std::lock_guard<std::mutex> lock(sensor_mutex_);
                 frames_.clear();  // what arrives during the motion is what handleCheck() judges the end against
             }
-            // Stage 3 follows the chosen candidate from where the grasp look saw it.
+            // follow the chosen candidate from where the grasp look saw it.
             if (!c_.track_enabled) {
                 break;
             }
@@ -568,6 +589,7 @@ private:
             tracker_.start(scene_camera_to_arm_.inverse() * scene_.candidates[plan_.candidate].point);
             track_ = TrackResult();
             trail_.clear();
+            steer_note_ = "on the plan", steer_aim_ = Eigen::Vector3d::Zero();
             break;
         }
         case State::COLLECT: {
@@ -722,9 +744,6 @@ private:
         message = scene_.summary + took;
         (spot_phase_ ? park_map_pub_ : map_pub_).publish(mapCloud(scene_.map, scene_to_world_, c_.world_frame));
         publishGrasps(-1);
-        if (!spot_phase_) {
-            message += comparedWithSnapshot();
-        }
         if (scene_.candidates.empty()) {
             return spot_phase_ ? Event::NO_CANDIDATES_SPOT : Event::NO_CANDIDATES_GRASP;
         }
@@ -743,9 +762,6 @@ private:
             return Event::FAILURE;
         }
         message        = choice.summary;
-        snapshot_      = scene_;
-        snapshot_to_world_ = scene_to_world_;
-        have_snapshot_ = choice.decision != ParkDecision::NOWHERE;
         if (choice.decision == ParkDecision::MOVE) {
             drive_to_ = compose(vehicle(), choice.move);
             return Event::SPOT_CHOSEN;
@@ -777,8 +793,8 @@ private:
                 message = std::string("the arm is outside its ") + JOINT_KEYS[j] + " limit";
                 return Event::FAILURE;
             }
-            start[j] = std::min(std::max(start[j], arm_.lower(j)), arm_.upper(j));
         }
+        start = arm_.clamped(start);
         try {
             grid_.reset(new ObstacleGrid(scene_.map, c_.park.link_radius, bladeRadius(scene_.map.box.voxel, c_.park.blade_step)));
             Collision collision(arm_, *grid_, c_.hull, c_.park.link_step);
@@ -787,8 +803,9 @@ private:
             message = std::string("the obstacle map is not usable: ") + e.what();
             return Event::FAILURE;
         }
-        steered_ = aimed_ = Eigen::Vector3d::Zero();
+        attempted_ = aimed_ = replanned_ = Eigen::Vector3d::Zero();
         retargets_ = 0;
+        steer_tries_.clear();
         message  = plan_.summary;
         publishGrasps(plan_.ok ? static_cast<int>(plan_.candidate) : -1);
         publishPath();
@@ -800,54 +817,105 @@ private:
         return Event::PLAN_FOUND;
     }
 
-    // Closed loop, a first cut. When the tracker puts the target track/retarget_m or more from where the arm is heading, the
-    // goal moves with it: the obstacles shift by the same offset (the scene taken as rigid, as vehicle drift makes it), the
-    // shifted target gets its holding posture nearest the current goal, and the arm heads there on a straight line from
-    // where it is, if that line is clear. Otherwise it stays on course until the next shift. No planner runs, so the arm
-    // never waits. Shifts beyond track/max_shift_m are ignored: heavily occluded, the tracker can claim to track while
-    // metres off.
-    void steer() {
+    // Until the face is covered (track/min_face_visible), the goal and the obstacles shift with the tracked target (the scene
+    // taken as rigid) and the arm is sent to no posture that hits them there. Once the tracked target is track/retarget_m from
+    // where the arm is heading, or the next posture is blocked, it goes straight to the shifted goal if clear, else plans
+    // around for track/replan_budget_s. Returns true when the arm must hold: its next posture is blocked and nothing clear was
+    // found. Shifts past track/max_shift_m are taken as tracking failures.
+    bool steer() {
         Eigen::Vector3d offset;
+        bool            ok = false;
         {
             std::lock_guard<std::mutex> lock(track_mutex_);
-            if (!track_.ok) {
-                return;
+            if (track_.covered) {
+                steer_note_ = "stopped, face covered: open loop to the last goal";
+                return false;
             }
-            offset = scene_camera_to_arm_.linear() * track_.offset;
+            ok     = track_.ok;
+            offset = scene_camera_to_arm_.linear() * track_.offset;  // the last good shift while a frame finds no consensus
         }
         Joints    now;
         ros::Time stamp;
-        if (offset.norm() > c_.track_max_shift || (offset - steered_).norm() < c_.track_retarget || !freshJoints(now, stamp)) {
-            return;
+        if (offset.norm() > c_.track_max_shift) {
+            noteSteer("ignoring a tracked shift past max_shift_m");
+            return false;
         }
-        steered_ = offset;  // tried once per shift
-        now      = arm_.toModel(now);
+        if (!freshJoints(now, stamp)) {
+            return false;
+        }
+        now = arm_.clamped(arm_.toModel(now));  // the planner takes no start past a limit
         grid_->setQueryToMap(Eigen::Isometry3d(Eigen::Translation3d(-offset)));  // a point near the moved scene, in the map
-        Collision collision(arm_, *grid_, c_.hull, c_.park.link_step);
+        Collision     collision(arm_, *grid_, c_.hull, c_.park.link_step);
+        Joints        next;
+        const Verdict ahead   = follower_.upcoming(next) ? collision.check(next) : Verdict::CLEAR;
+        const bool    blocked = ahead == Verdict::OBSTACLE || ahead == Verdict::HULL;
+        const char   *hits    = ahead == Verdict::HULL ? "hull" : "obstacle";
+        // Tried once per tracker frame (each moves the offset).
+        if (offset == attempted_ || (!blocked && (!ok || (offset - aimed_).norm() < c_.track_retarget))) {
+            return blocked;
+        }
+        attempted_ = offset;
+        const auto give_up = [&](const std::string &why) {
+            ++steer_tries_[why];
+            noteSteer(blocked ? std::string("HOLDING, next posture hits the ") + hits + "; " + why : "staying on course; " + why);
+            return blocked;
+        };
+
         GraspPose target = scene_.candidates[plan_.candidate];
         target.point += offset;
         std::vector<GraspGoal> goals;
-        graspGoals(target, 0, plan_.path.back(), arm_.mountDistance() + c_.plan.grasp_point_from_mount, collision, goals);
+        const Outcome o = graspGoals(target, 0, plan_.path.back(), arm_.mountDistance() + c_.plan.grasp_point_from_mount, collision, goals);
+        if (goals.empty()) {
+            return give_up(std::string("no holding posture (") + outcomeName(o) + ")");
+        }
         std::sort(goals.begin(), goals.end(), [](const GraspGoal &a, const GraspGoal &b) { return a.swing < b.swing; });
-        for (const GraspGoal &g : goals) {
-            if (collision.segmentClear(now, g.joints, c_.plan.edge_step)) {
-                plan_.path = {now, g.joints};
-                aimed_     = offset;
-                follower_.load(plan_.path);
-                last_stamp_ = ros::Time();
-                ++retargets_;
-                publishPath();
-                ROS_INFO_THROTTLE(1.0, "[pick] tracker moved the target %.0f mm: heading for it", 1000 * offset.norm());
-                return;
+        std::vector<Joints> path;
+        Verdict             v = Verdict::CLEAR;
+        for (size_t i = 0; i < goals.size() && path.empty(); ++i) {
+            v = collision.sweep(now, goals[i].joints, c_.plan.edge_step);
+            if (v == Verdict::CLEAR) {
+                path = {now, goals[i].joints};
             }
         }
-        ROS_INFO_THROTTLE(1.0, "[pick] tracker moved the target %.0f mm: no straight way there yet, staying on course", 1000 * offset.norm());
+        // Nothing straight: plan around it. The arm waits while that runs: every frame when blocked, else once per retarget_m.
+        const char *how = "straight";
+        if (path.empty() && (blocked || (offset - replanned_).norm() >= c_.track_retarget)) {
+            replanned_      = offset;
+            PlanSettings s  = c_.plan;
+            s.budget_s      = c_.track_replan_s;
+            s.goal_budget_s = 0.5 * c_.track_replan_s;
+            const Plan p    = planGrasp({target}, now, collision, s, [this] { return stop_requested_.load(); });
+            if (!p.ok) {
+                return give_up("replan found no way");
+            }
+            path = p.path;
+            how  = "replanned around";
+        }
+        if (path.empty()) {
+            return give_up(std::string("straight way blocked (") + (v == Verdict::HULL ? "hull" : v == Verdict::OBSTACLE ? "obstacle" : "joint_limit") + ")");
+        }
+        ++steer_tries_[std::string(blocked ? "avoided: " : "retargeted: ") + how];
+        plan_.path = path;
+        aimed_     = offset;
+        follower_.load(plan_.path);
+        last_stamp_ = ros::Time();
+        ++retargets_;
+        publishPath();
+        char line[120];
+        std::snprintf(line, sizeof(line), "%s%s to the target shifted %.0f mm", blocked ? "avoided the obstacle, " : "", how, 1000 * offset.norm());
+        noteSteer(line);
+        return false;
+    }
+
+    // What steering last did and the shift it aims at, for the debug image.
+    void noteSteer(const std::string &note) {
+        std::lock_guard<std::mutex> lock(track_mutex_);
+        steer_note_ = note;
+        steer_aim_  = aimed_;
     }
 
     Event follow(std::string &message) {
-        if (c_.track_enabled && c_.track_steer) {
-            steer();
-        }
+        const bool hold = c_.track_enabled && c_.track_steer && steer();
         Joints    reported;
         ros::Time stamp;
         // Without readings a joint against something goes unnoticed, so the arm holds its last target instead of moving on blind.
@@ -861,7 +929,7 @@ private:
         }
         Joints          target;
         bool            send  = false;
-        const Following state = follower_.tick(ros::Time::now().toSec(), target, send);
+        const Following state = hold ? Following::SENDING : follower_.tick(ros::Time::now().toSec(), target, send);
         if (send) {
             sensor_msgs::JointState msg;
             msg.header.stamp = ros::Time::now();
@@ -871,32 +939,41 @@ private:
             targets_pub_.publish(msg);
         }
         switch (state) {
-        case Following::REACHED: {
-            message = "reached the end of the path" + handleCheck(arm_.toModel(reported));
-            if (c_.track_enabled) {
-                std::lock_guard<std::mutex> lock(track_mutex_);
-                char                        line[120];
-                std::snprintf(line, sizeof(line), "; the tracker saw the target move %.1f mm (%s)", 1000 * track_.offset.norm(),
-                              track_.ok ? "tracking" : "not tracking");
-                message += line;
-                if (c_.track_steer) {
-                    const double behind = (scene_camera_to_arm_.linear() * track_.offset - aimed_).norm();
-                    std::snprintf(line, sizeof(line), "; %d retargets left the goal %.1f mm from it", retargets_, 1000 * behind);
-                    message += line;
-                }
-            }
+        case Following::REACHED:
+            message = "reached the end of the path" + motionReport(arm_.toModel(reported));
             return Event::REACHED;
-        }
         case Following::STALLED:
             releaseArm();
             message = "did not arrive within the arrival timeout, arm released";
             return Event::STALLED;
         case Following::BLOCKED:
-            message = c_.joint_names[follower_.blockedJoint()] + " stopped following, so the arm hit something";
+            message = c_.joint_names[follower_.blockedJoint()] + " stopped following, so the arm hit something" + motionReport(arm_.toModel(reported));
             return Event::COLLIDED;
         default:
             return Event::NONE;
         }
+    }
+
+    // Where the jaw is against the handle, and what the tracker and steering did on the way there.
+    std::string motionReport(const Joints &q) {
+        std::string out = handleCheck(q);
+        if (!c_.track_enabled) {
+            return out;
+        }
+        std::lock_guard<std::mutex> lock(track_mutex_);
+        char                        line[120];
+        std::snprintf(line, sizeof(line), "; the tracker saw the target move %.1f mm (%s)", 1000 * track_.offset.norm(),
+                      track_.covered ? "face covered, open loop" : track_.ok ? "tracking" : "not tracking");
+        out += line;
+        if (c_.track_steer) {
+            const double behind = (scene_camera_to_arm_.linear() * track_.offset - aimed_).norm();
+            std::snprintf(line, sizeof(line), "; %d retargets left the goal %.1f mm from it", retargets_, 1000 * behind);
+            out += line;
+            for (const auto &b : steer_tries_) {
+                out += "; " + std::to_string(b.second) + " tries: " + b.first;
+            }
+        }
+        return out;
     }
 
     // Settled once the jaw reading holds still; stopping short of closed means it holds something.
@@ -935,52 +1012,36 @@ private:
     // handle really went; a live camera's are not trustworthy with the arm in view.
     std::string handleCheck(const Joints &q) {
         on_handle_ = false;
-        std::vector<Eigen::Vector3d> handle;
+        std::vector<GraspPose> handle;
         {
             std::lock_guard<std::mutex> lock(sensor_mutex_);
             if (frames_.empty()) {
                 return "; no grasp poses during the motion to check the jaw against";
             }
+            const Eigen::Isometry3d &t = frames_.back().camera_to_arm;
             for (const GraspPose &g : frames_.back().poses) {
-                handle.push_back(frames_.back().camera_to_arm * g.point);
+                handle.push_back({t * g.point, t.linear() * g.bar, t.linear() * g.approach});
             }
         }
         const double          along   = c_.plan.grasp_point_from_mount;
         const Eigen::Vector3d grasp   = arm_.points(q).mount + arm_.axes(q).approach * along;
         const Eigen::Vector3d planned = scene_.candidates[plan_.candidate].point;
-        const Eigen::Vector3d j       = arm_.inJaw(q, nearestOnHandle(handle, c_.cloud.bar_gap, grasp));
-        on_handle_                    = arm_.betweenBlades(j);
+        const Eigen::Vector3d j       = arm_.inJaw(q, nearestOnHandle(handle, 0.5 * c_.cloud.bar_gap, grasp));
+        on_handle_                    = Arm::caught(j, c_.catch_reach, c_.catch_off_centre);
+        // The handle judged, as each pose's bar: green on it, red missed.
+        visualization_msgs::Marker bars = marker(c_.arm_frame, "handle_check", visualization_msgs::Marker::LINE_LIST, on_handle_ ? 0.1f : 1.0f,
+                                                 on_handle_ ? 1.0f : 0.1f, 0.1f, 1.0f, 0.002);
+        for (const GraspPose &g : handle) {
+            const Eigen::Vector3d half = 0.5 * c_.cloud.bar_gap * g.bar.normalized();
+            bars.points.push_back(toPoint(g.point - half));
+            bars.points.push_back(toPoint(g.point + half));
+        }
+        handle_pub_.publish(bars);
         char line[200];
         std::snprintf(line, sizeof(line),
                       "; %s: it sits %+.1f %+.1f %+.1f mm from the grasp point (approach, hinge, closing); the planned target is %.1f mm off it",
                       on_handle_ ? "ON THE HANDLE" : "MISSED THE HANDLE", 1000 * (j.x() - along), 1000 * j.y(), 1000 * j.z(),
-                      1000 * (nearestOnHandle(handle, c_.cloud.bar_gap, planned) - planned).norm());
-        return line;
-    }
-
-    // How far the pre-drive snapshot turned out to be wrong: dead reckoning plus whatever the scene did.
-    std::string comparedWithSnapshot() {
-        if (!have_snapshot_ || snapshot_.candidates.empty() || scene_.candidates.empty()) {
-            return "";
-        }
-        const Eigen::Isometry3d then_to_now = scene_to_world_.inverse() * snapshot_to_world_;
-        std::vector<double>     gaps;
-        for (const GraspPose &was : snapshot_.candidates) {
-            double nearest = std::numeric_limits<double>::max();
-            for (const GraspPose &now : scene_.candidates) {
-                nearest = std::min(nearest, (then_to_now * was.point - now.point).norm());
-            }
-            if (nearest <= c_.snapshot_match) {
-                gaps.push_back(nearest);
-            }
-        }
-        if (gaps.empty()) {
-            return "; nothing from before the drive matches what is there now";
-        }
-        std::sort(gaps.begin(), gaps.end());
-        char line[120];
-        std::snprintf(line, sizeof(line), "; the snapshot was %.1f mm out at the median, %.1f mm at worst", gaps[gaps.size() / 2] * 1000.0,
-                      gaps.back() * 1000.0);
+                      1000 * (nearestOnHandle(handle, 0.5 * c_.cloud.bar_gap, planned) - planned).norm());
         return line;
     }
 
@@ -1058,6 +1119,8 @@ private:
         visualization_msgs::Marker line = marker(c_.arm_frame, "path", visualization_msgs::Marker::LINE_STRIP, 0, 0, 0, 0, 0);
         line.action                      = visualization_msgs::Marker::DELETE;
         path_pub_.publish(line);
+        line.ns = "handle_check";
+        handle_pub_.publish(line);
         if (c_.track_enabled) {
             visualization_msgs::MarkerArray wipe;
             wipe.markers.push_back(marker(c_.camera_frame, "", visualization_msgs::Marker::ARROW, 0, 0, 0, 0, 0));
@@ -1096,14 +1159,16 @@ private:
     message_filters::Subscriber<sensor_msgs::Image>                              image_sub_;
     message_filters::TimeSynchronizer<sensor_msgs::PointCloud2, sensor_msgs::Image> track_sync_;
     ros::Subscriber                                                              view_sub_;
-    ros::Publisher                                                               debug_pub_, target_pub_, shift_pub_;
+    ros::Publisher                                                               debug_pub_, info_pub_, shift_pub_;
     std::vector<Eigen::Vector3d>                                                 trail_;  // the tracked target over this blind motion
     std::mutex                                                                   track_mutex_;
     Tracker                                                                      tracker_;
     TrackResult                                                                  track_;
     std::atomic<TrackView>                                                       view_{TrackView::RANSAC};
+    std::string                                                                  steer_note_;  // what steering last did
+    Eigen::Vector3d                                                              steer_aim_ = Eigen::Vector3d::Zero();  // its shift, arm frame
     ros::Subscriber                   joints_sub_;
-    ros::Publisher                    targets_pub_, state_pub_, park_map_pub_, map_pub_, grasp_pub_, path_pub_, body_pub_, hull_pub_;
+    ros::Publisher                    targets_pub_, state_pub_, park_map_pub_, map_pub_, grasp_pub_, path_pub_, handle_pub_, body_pub_, hull_pub_;
     ros::ServiceClient                close_jaw_, standby_, home_;
     std::vector<ros::ServiceServer>   services_;
     ros::Timer                        tf_timer_;
@@ -1122,17 +1187,19 @@ private:
 
     std::atomic<bool> start_requested_{false}, stop_requested_{false}, working_{false};
     State             state_ = State::READY;
-    bool              spot_phase_ = true, grabbed_ = false, on_handle_ = false, have_snapshot_ = false;
+    bool              spot_phase_ = true, grabbed_ = false, on_handle_ = false;
     uint32_t          park_attempt_ = 0, look_attempt_ = 0;
     long              ticks_ = 0;
     ros::Time         entered_ = ros::Time::now(), run_started_, surveying_since_, reparking_since_, last_stamp_;
-    Scene             scene_, snapshot_;
-    Eigen::Isometry3d scene_to_world_ = Eigen::Isometry3d::Identity(), snapshot_to_world_ = Eigen::Isometry3d::Identity();
+    Scene             scene_;
+    Eigen::Isometry3d scene_to_world_ = Eigen::Isometry3d::Identity();
     Plan              plan_;
-    Eigen::Isometry3d scene_camera_to_arm_ = Eigen::Isometry3d::Identity();  // the newest frame of the look, for stage 3
-    Eigen::Vector3d   steered_             = Eigen::Vector3d::Zero();      // the last tracked shift tried, arm frame
+    Eigen::Isometry3d scene_camera_to_arm_ = Eigen::Isometry3d::Identity();  // the newest frame of the look
+    Eigen::Vector3d   attempted_           = Eigen::Vector3d::Zero();      // the last tracked shift tried, arm frame
     Eigen::Vector3d   aimed_               = Eigen::Vector3d::Zero();      // the shift the goal actually took
     int               retargets_             = 0;
+    Eigen::Vector3d   replanned_           = Eigen::Vector3d::Zero();      // the tracked shift last planned around
+    std::map<std::string, int> steer_tries_;                               // what steering tries came to this motion
     std::unique_ptr<ObstacleGrid> grid_;  // the grasp look's obstacles, inflated once; steering shifts it by a query offset
     VehiclePose       drive_from_, drive_to_;
     int               drive_steps_ = 1, drive_step_ = 0;

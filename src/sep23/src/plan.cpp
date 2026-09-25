@@ -75,7 +75,7 @@ Joints toJoints(const ob::State *s) {
 // One RRTConnect query; the start is taken as valid so the arm can always leave where it is.
 bool connect(const Joints &start, const Joints &goal, Collision &collision, const PlanSettings &s, double budget_s,
              const std::function<bool()> &cancelled, std::vector<Joints> &path) {
-    if (collision.segmentClear(start, goal, s.edge_step)) {
+    if (collision.sweep(start, goal, s.edge_step) == Verdict::CLEAR) {
         path = {start, goal};
         return true;
     }

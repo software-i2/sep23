@@ -174,18 +174,18 @@ TEST(Arm, InverseKinematicsRecoversEveryFrontFacingPosture) {
     EXPECT_GT(front, 200);
 }
 
-TEST(Arm, TellsWhatLiesBetweenTheOpenBlades) {
+TEST(Arm, TellsWhatTheJawCaught) {
     ArmConfig c           = testArm(expandedUrdf());
-    c.jaw.mount_to_throat = 0.03;
     const Arm             arm(c, 0.005);
     const Joints          q{{0.3, 1.2, 0.8, -0.5}};
     const JawAxes         a     = arm.axes(q);
     const Eigen::Vector3d grasp = arm.points(q).mount + 0.06 * a.approach;
-    EXPECT_TRUE(arm.betweenBlades(arm.inJaw(q, grasp)));
-    EXPECT_TRUE(arm.betweenBlades(arm.inJaw(q, grasp + 0.004 * a.hinge + 0.003 * a.closing)));
-    EXPECT_FALSE(arm.betweenBlades(arm.inJaw(q, grasp + 0.005 * a.closing))) << "outside the 7 mm opening";
-    EXPECT_FALSE(arm.betweenBlades(arm.inJaw(q, grasp + 0.006 * a.hinge))) << "beside the blades";
-    EXPECT_FALSE(arm.betweenBlades(arm.inJaw(q, grasp + 0.04 * a.approach))) << "past the tips";
+    const auto            caught = [&](const Eigen::Vector3d &p) { return Arm::caught(arm.inJaw(q, p), 0.07, 0.01); };
+    EXPECT_TRUE(caught(grasp));
+    EXPECT_TRUE(caught(grasp + 0.006 * a.hinge + 0.007 * a.closing));
+    EXPECT_FALSE(caught(grasp + 0.011 * a.closing)) << "off centre";
+    EXPECT_FALSE(caught(grasp + 0.011 * a.approach)) << "past 70 mm";
+    EXPECT_FALSE(caught(grasp - 0.07 * a.approach)) << "behind the mount";
 }
 
 TEST(Collision, InflatesObstaclesAndKeepsHandleExact) {
@@ -228,7 +228,7 @@ TEST(Park, ReachMapNeverRefusesWhatTheIkSolves) {
 // A mine face drifting across the image, an arm patch inside the depth gate moving the other way, a seabed behind the gate.
 TEST(Track, FollowsTheMineThroughAnArmInsideTheGate) {
     CameraModel camera{320, 240, 250.0, 250.0, 160.0, 120.0};
-    TrackSettings s{0.05, 0.25, 15, 150, 2.5};
+    TrackSettings s{0.05, 0.25, 15, 150, 2.5, 0.5};
     const auto    texture = [&] {
         cv::Mat t(480, 640, CV_8U);
         cv::randu(t, 0, 255);
@@ -288,6 +288,19 @@ TEST(Track, FollowsTheMineThroughAnArmInsideTheGate) {
     EXPECT_NEAR(r.offset.y(), -frames * dy * 0.40 / camera.fy, 0.002);
     EXPECT_NEAR(r.offset.z(), 0.0, 0.002);
     EXPECT_GT(arm_rejected, 0u) << "RANSAC never rejected an arm corner";
+    EXPECT_FALSE(r.covered);
+
+    // The mine and the arm hidden: tracking stops rather than follow what is left, and stays stopped once they are back.
+    frame(frames + 1, gray, points);
+    for (int v = 0; v < camera.height; ++v) {
+        for (int u = 0; u < 260; ++u) {
+            points[static_cast<size_t>(v) * camera.width + u] = Eigen::Vector3f::Constant(NAN);
+        }
+    }
+    r = tracker.update(gray, points);
+    EXPECT_TRUE(r.covered && !r.ok) << "face " << r.face;
+    frame(frames + 2, gray, points);
+    EXPECT_TRUE(tracker.update(gray, points).covered);
 }
 
 TEST(Cloud, ConsensusKeepsWhatFramesAgreeOn) {
@@ -315,10 +328,11 @@ TEST(Cloud, ConsensusKeepsWhatFramesAgreeOn) {
     EXPECT_TRUE(agreeOnSpots({frames[0]}, s, summary).empty()) << "one frame cannot agree with itself";
 }
 
-TEST(Cloud, HandleJoinsOnlyCloseNeighbours) {
-    const std::vector<Eigen::Vector3d> bar = {{0.0, 0.0, 0.0}, {0.01, 0.0, 0.0}, {0.05, 0.0, 0.0}};
-    EXPECT_LT((nearestOnHandle(bar, 0.015, {0.004, 0.002, 0.0}) - Eigen::Vector3d(0.004, 0.0, 0.0)).norm(), 1e-12);
-    EXPECT_LT((nearestOnHandle(bar, 0.015, {0.025, 0.002, 0.0}) - Eigen::Vector3d(0.01, 0.0, 0.0)).norm(), 1e-12) << "0.01 to 0.05 is a gap";
+TEST(Cloud, HandleRunsAlongEachPoseBar) {
+    const Eigen::Vector3d        x = Eigen::Vector3d::UnitX(), z = Eigen::Vector3d::UnitZ();
+    const std::vector<GraspPose> bar = {{{0.05, 0.0, 0.0}, x, z}, {{0.0, 0.0, 0.0}, -x, z}};  // any order, either way along
+    EXPECT_LT((nearestOnHandle(bar, 0.0075, {0.004, 0.002, 0.0}) - Eigen::Vector3d(0.004, 0.0, 0.0)).norm(), 1e-12);
+    EXPECT_LT((nearestOnHandle(bar, 0.0075, {0.02, 0.002, 0.0}) - Eigen::Vector3d(0.0075, 0.0, 0.0)).norm(), 1e-12) << "past the bar's end";
 }
 
 // A tilted wall with scattered missing pixels and one pixel floating in front of it: the filter keeps the wall, drops the spike.
