@@ -83,7 +83,7 @@ struct PickConfig {
     CameraModel                          camera;
     Eigen::Isometry3d                    camera_to_vehicle = Eigen::Isometry3d::Identity();
     Eigen::Isometry3d                    arm_to_vehicle    = Eigen::Isometry3d::Identity();
-    bool                                 synthetic = false;  // the SYNTHETIC camera: fixed in the world
+    bool                                 camera_fixed_in_world = false;  // a replayed bag or the synthetic scene saw it from one place
     Hull                                 hull;
     CloudSettings                        cloud;
     int                                  frames_needed = 1, approach_column = 0, bar_column = 1;
@@ -161,7 +161,7 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
 
     c.loop_hz               = pick.number("loop_hz");
     c.joint_state_timeout_s = pick.number("joint_state_timeout_s");
-    c.synthetic             = pick.flag("synthetic");
+    c.camera_fixed_in_world = pick.flag("camera_fixed_in_world");
     c.stream_timeout_s      = pick.number("task/stream_timeout_s");
     c.spot_search_s         = pick.number("task/spot_search_s");
     c.repark_search_s       = pick.number("task/repark_search_s");
@@ -333,8 +333,8 @@ public:
         services_ = {pnh.advertiseService("start", &Pick::onStart, this), pnh.advertiseService("stop", &Pick::onStop, this),
                      pnh.advertiseService("reset", &Pick::onReset, this)};
         tf_timer_ = nh_.createTimer(ros::Duration(1.0 / c_.loop_hz), [this](const ros::TimerEvent &) { broadcastVehicle(); });
-        // The synthetic camera stays put while the vehicle moves, so the URDF leaves it off the vehicle and it is pinned here.
-        if (c_.synthetic) {
+        // A replayed camera stays put while the vehicle moves, so the URDF leaves it off the vehicle and it is pinned here.
+        if (c_.camera_fixed_in_world) {
             geometry_msgs::TransformStamped t = tf2::eigenToTransform(c_.camera_to_vehicle);
             t.header.stamp    = ros::Time::now();
             t.header.frame_id = c_.world_frame;
@@ -467,7 +467,7 @@ private:
             frame.poses.push_back({Eigen::Vector3d(p.position.x, p.position.y, p.position.z), r.col(c_.bar_column), r.col(c_.approach_column)});
         }
         const Eigen::Isometry3d vehicle_to_world = toIsometry(vehicle());
-        const Eigen::Isometry3d camera_to_world  = c_.synthetic ? c_.camera_to_vehicle : vehicle_to_world * c_.camera_to_vehicle;
+        const Eigen::Isometry3d camera_to_world  = c_.camera_fixed_in_world ? c_.camera_to_vehicle : vehicle_to_world * c_.camera_to_vehicle;
         frame.camera_to_arm = (vehicle_to_world * c_.arm_to_vehicle).inverse() * camera_to_world;
 
         std::lock_guard<std::mutex> lock(sensor_mutex_);

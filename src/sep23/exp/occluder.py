@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Paints a textured obstacle into /synthetic/image while the pick is in GOTOGRASP and splits /synthetic/pointcloud by it.
+"""Paints a textured obstacle into `image` while the pick is in GOTOGRASP and splits `cloud` by it.
 Publishes /occluder/image (the pick's camera), /non_occluded/pointcloud (what the camera still sees: the pick's cloud) and
 /occluded/pointcloud (what the obstacle hides). Both clouds stay organised, NaN where the other has a point.
 _cover:=100 is the most of the frame it covers, in percent."""
@@ -80,15 +80,11 @@ def split(cloud, hidden):
 
 
 def run():
-    import time
     import message_filters
-    import rosgraph
     import rospy
     from sensor_msgs.msg import Image, PointCloud2
     from sep23.msg import PickState
 
-    while not rosgraph.is_master_online():
-        time.sleep(0.5)
     rospy.init_node("occluder")
     cover = min(max(rospy.get_param("~cover", 100), 0), 100) / 100.0
     rng = np.random.default_rng()
@@ -126,8 +122,8 @@ def run():
         out_image.step, out_image.data = w * 3, paint(bgr, mask, state["pattern"], shift).tobytes()
         publish(out_image, cloud, mask)
 
-    subs = [message_filters.Subscriber("/synthetic/image", Image, queue_size=2, buff_size=2 ** 24),
-            message_filters.Subscriber("/synthetic/pointcloud", PointCloud2, queue_size=2, buff_size=2 ** 24)]
+    subs = [message_filters.Subscriber("image", Image, queue_size=2, buff_size=2 ** 24),
+            message_filters.Subscriber("cloud", PointCloud2, queue_size=2, buff_size=2 ** 24)]
     message_filters.TimeSynchronizer(subs, 10).registerCallback(on_pair)
     rospy.Subscriber("/pick/state", PickState, on_pick)
     rospy.spin()

@@ -47,15 +47,10 @@ def render(placed, nearest_first, camera):
 def run():
     import copy
 
-    import time
-
     import rosbag
-    import rosgraph
     import rospy
     from occluder import xyz_view
 
-    while not rosgraph.is_master_online():  # started alongside roslaunch: wait rather than crash on the first param write
-        time.sleep(0.5)
     rospy.init_node("synthetic_drift")
     from geometry_msgs.msg import Point, Pose, PoseArray, Quaternion
     from tf.transformations import quaternion_about_axis, quaternion_multiply
@@ -64,13 +59,14 @@ def run():
     k, rate_hz, period = 0, 10.0, 20.0  # bag frame, publish rate, sway period
     amplitude = rospy.get_param("~amplitude_m", 0.02)
     phases = np.random.default_rng(1).uniform(0, 2 * np.pi, 3)
-    while not rospy.has_param("/robot/camera/intrinsics") and not rospy.is_shutdown():
-        rospy.sleep(0.5)  # pick.launch loads the camera a moment after the master comes up
     i = rospy.get_param("/robot/camera/intrinsics")
     camera = (i["height_px"], i["width_px"], i["fx_px"], i["fy_px"], i["cx_px"], i["cy_px"])
 
     seen = {}
-    with rosbag.Bag(rospy.get_param("~bag")) as bag:
+    path = rospy.get_param("~bag", "")
+    if not path:
+        raise SystemExit("[synthetic] synthetic:=true needs bag:=<bag to take the frame from>")
+    with rosbag.Bag(path) as bag:
         for topic, msg, _ in bag.read_messages(topics=["/image", "/pointcloud", "/grasp_poses"]):
             seen.setdefault(topic, []).append(msg)
     image, cloud, poses = (seen[t][k] for t in ("/image", "/pointcloud", "/grasp_poses"))

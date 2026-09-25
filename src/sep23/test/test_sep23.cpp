@@ -100,6 +100,33 @@ TEST(Follower, ReachesAndCatchesAStuckJoint) {
     EXPECT_EQ(f.blockedJoint(), BASE);
 }
 
+// The largest move sets the step count; every joint covers its share per step, so all arrive on the same tick.
+TEST(Follower, JointsArriveTogether) {
+    FollowSettings s{rad(0.5), rad(0.5), 5.0, rad(0.2), 0.2, 3};
+    PathFollower   f(s);
+    const Joints   start{}, goal{{rad(10), rad(-4), rad(1), 0}};
+    Joints         target, previous = start;
+    bool           send = false;
+
+    f.load({start, goal});
+    int sent = 0;
+    for (int t = 0; t < 100; ++t) {
+        f.tick(t * 0.05, target, send);
+        if (!send) {
+            break;
+        }
+        ++sent;
+        for (int j = 0; j < JOINT_COUNT; ++j) {
+            EXPECT_NEAR(target[j] - previous[j], goal[j] / 20, 1e-9);  // 10 deg / 0.5 deg = 20 steps
+        }
+        previous = target;
+    }
+    EXPECT_EQ(sent, 20);
+    for (int j = 0; j < JOINT_COUNT; ++j) {
+        EXPECT_NEAR(target[j], goal[j], 1e-9);
+    }
+}
+
 TEST(Bpl, FramesRoundTripAndRejectCorruption) {
     std::vector<uint8_t> stream = bpl::encode(5, bpl::POSITION, 1.5f);
     EXPECT_EQ(stream.back(), 0x00);

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Repeats the pick and counts outcomes. usage: scripts/soak.sh [seconds = 600] [steer = true]
-# env: YAW_DEG=180 turns the synthetic mine a random whole degree within +-YAW_DEG each attempt (0 holds it); ATTEMPT_TIMEOUT=120
+# env: YAW_DEG=180 turns the synthetic mine (synthetic:=true) a random whole degree within +-YAW_DEG each attempt; ATTEMPT_TIMEOUT=120
 set -uo pipefail
 DURATION="${1:-600}"
 STEER="${2:-true}"
 ATTEMPT_TIMEOUT="${ATTEMPT_TIMEOUT:-120}"
-YAW_DEG="${YAW_DEG:-180}"
+YAW_DEG="${YAW_DEG:-0}"
 case "$STEER" in true | false) ;; *) echo "[soak] steer $STEER is not true or false" >&2; exit 1 ;; esac
 rosparam set /pick/track/steer "$STEER"  # the pick reads it on every start
 field() { rostopic echo -n1 "$1" 2>/dev/null | head -1 | tr -d '"'; }
@@ -13,7 +13,7 @@ field() { rostopic echo -n1 "$1" 2>/dev/null | head -1 | tr -d '"'; }
 started=$SECONDS attempts=0 success=0 grabbed=0 on_handle=0 failed=0 timed_out=0
 while [ $((SECONDS - started)) -lt "$DURATION" ]; do
     yaw=$((RANDOM % (2 * YAW_DEG + 1) - YAW_DEG))
-    rosparam set /synthetic/yaw_deg "$yaw"  # before the reset, so the next look already sees it turned
+    [ "$YAW_DEG" -gt 0 ] && rosparam set /synthetic/yaw_deg "$yaw"  # before the reset, so the next look already sees it turned
     rosservice call /pick/reset >/dev/null 2>&1
     sleep 1
     attempts=$((attempts + 1))
