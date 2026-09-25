@@ -14,13 +14,19 @@ namespace {
 
 bool finite(const Eigen::Vector3f &p) { return std::isfinite(p.x()) && std::isfinite(p.y()) && std::isfinite(p.z()) && p.z() < 0.0f; }
 
+const cv::Size kWindow(21, 21);  // KLT window
+const int      kEdgePx = 10;     // corners kept this far inside the gate: a window across its edge is dragged by what is past it
+const float    kBackPx = 1.0f;   // forward-backward check (Kalal et al. 2010): a corner flowed back further off was dragged
+
 }  // namespace
 
 void Tracker::start(const Eigen::Vector3d &target) {
-    active_ = true, seeded_ = calibrated_ = covered_ = false;
+    active_ = true, seeded_ = covered_ = false;
     start_target_ = target_ = target;
     target_px_ = start_px_  = project(target);
-    points_.clear();
+    points_.clear(), start_depth_.clear();
+    depth_change_ = 0.0;
+    smoothed_     = Eigen::Vector3d::Zero();
 }
 
 // camera_link looks down -z with y up, so depth is -z and image v grows as y falls.
@@ -47,23 +53,25 @@ cv::Mat Tracker::gateMask(const std::vector<Eigen::Vector3f> &points) const {
     return mask;
 }
 
+// One depth per pixel, NaN where the cloud has none.
 std::vector<double> Tracker::depthsAt(const std::vector<cv::Point2f> &px, const std::vector<Eigen::Vector3f> &points) const {
-    std::vector<double> out;
-    for (const cv::Point2f &p : px) {
-        const int u = static_cast<int>(std::lround(p.x)), v = static_cast<int>(std::lround(p.y));
+    std::vector<double> out(px.size(), std::nan(""));
+    for (size_t i = 0; i < px.size(); ++i) {
+        const int u = static_cast<int>(std::lround(px[i].x)), v = static_cast<int>(std::lround(px[i].y));
         if (u >= 0 && v >= 0 && u < camera_.width && v < camera_.height) {
             const Eigen::Vector3f &q = points[static_cast<size_t>(v) * camera_.width + u];
             if (finite(q)) {
-                out.push_back(-q.z());
+                out[i] = -q.z();
             }
         }
     }
     return out;
 }
 
-void Tracker::seed(const cv::Mat &gray, const cv::Mat &mask) {
+void Tracker::seed(const cv::Mat &gray, const cv::Mat &mask, const std::vector<Eigen::Vector3f> &points) {
     // Corners already tracked keep their place; new ones fill the rest of the gate away from them.
-    cv::Mat free = mask.clone();
+    cv::Mat free;
+    cv::erode(mask, free, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2 * kEdgePx + 1, 2 * kEdgePx + 1)));
     for (const cv::Point2f &p : points_) {
         cv::circle(free, p, 7, cv::Scalar(0), -1);
     }
@@ -73,11 +81,15 @@ void Tracker::seed(const cv::Mat &gray, const cv::Mat &mask) {
         cv::goodFeaturesToTrack(gray, fresh, want, 0.01, 7, free);
     }
     points_.insert(points_.end(), fresh.begin(), fresh.end());
+    // Each new corner's depth at the start: what it reads now, less how far the target's depth has changed since.
+    for (const double d : depthsAt(fresh, points)) {
+        start_depth_.push_back(d - depth_change_);
+    }
 }
 
 TrackResult Tracker::update(const cv::Mat &gray, const std::vector<Eigen::Vector3f> &points) {
     TrackResult r;
-    r.target_px = target_px_, r.start_px = start_px_, r.target = target_, r.offset = target_ - start_target_;
+    r.target_px = target_px_, r.start_px = start_px_, r.target = start_target_ + smoothed_, r.offset = smoothed_;
     if (!active_ || points.size() != static_cast<size_t>(camera_.width) * camera_.height || gray.cols != camera_.width
         || gray.rows != camera_.height) {
         return r;
@@ -85,9 +97,9 @@ TrackResult Tracker::update(const cv::Mat &gray, const std::vector<Eigen::Vector
     r.mask            = gateMask(points);
     const double area = cv::countNonZero(r.mask);
     if (!seeded_) {
-        seed(gray, r.mask);
+        seed(gray, r.mask, points);
         if (points_.size() < 3) {
-            points_.clear();
+            points_.clear(), start_depth_.clear();
             return r;  // nothing textured at the target's depth yet; try the next frame
         }
         previous_      = gray.clone();
@@ -102,24 +114,32 @@ TrackResult Tracker::update(const cv::Mat &gray, const std::vector<Eigen::Vector
         return r;
     }
 
-    std::vector<cv::Point2f> moved;
-    std::vector<uint8_t>     status;
+    std::vector<cv::Point2f> moved, back;
+    std::vector<uint8_t>     status, back_status;
     std::vector<float>       error;
     if (!points_.empty()) {
-        cv::calcOpticalFlowPyrLK(previous_, gray, points_, moved, status, error, cv::Size(21, 21), 3);
+        cv::calcOpticalFlowPyrLK(previous_, gray, points_, moved, status, error, kWindow, 3);
+        cv::calcOpticalFlowPyrLK(gray, previous_, moved, back, back_status, error, kWindow, 3);
     }
-    // Only points that land back inside the gate count: the arm in front of the mine, the seabed behind it, fall out here.
+    // Only points that flow back where they came from and land inside the gate, clear of its edge, count: the arm in front
+    // of the mine, the seabed behind it and corners dragged by an occluder's edge fall out here.
+    cv::Mat inside;
+    cv::erode(r.mask, inside, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(2 * kEdgePx + 1, 2 * kEdgePx + 1)));
+    std::vector<double> from_depth;
     for (size_t i = 0; i < points_.size(); ++i) {
         const cv::Point2i at(static_cast<int>(std::lround(moved[i].x)), static_cast<int>(std::lround(moved[i].y)));
-        if (status[i] && at.x >= 0 && at.y >= 0 && at.x < camera_.width && at.y < camera_.height && r.mask.at<uint8_t>(at)) {
+        const bool        returned = back_status[i] && cv::norm(back[i] - points_[i]) < kBackPx;
+        if (status[i] && returned && at.x >= 0 && at.y >= 0 && at.x < camera_.width && at.y < camera_.height && inside.at<uint8_t>(at)) {
             r.from.push_back(points_[i]);
             r.to.push_back(moved[i]);
+            from_depth.push_back(start_depth_[i]);
         } else {
             ++r.lost;
         }
     }
 
     std::vector<cv::Point2f> kept;
+    std::vector<double>      kept_depth;
     if (r.from.size() >= 3) {
         cv::Mat         inliers;
         const cv::Mat   a = cv::estimateAffinePartial2D(r.from, r.to, inliers, cv::RANSAC, s_.ransac_px, 2000, 0.99);
@@ -128,6 +148,7 @@ TrackResult Tracker::update(const cv::Mat &gray, const std::vector<Eigen::Vector
             for (size_t i = 0; i < r.to.size(); ++i) {
                 if (r.inlier[i]) {
                     kept.push_back(r.to[i]);
+                    kept_depth.push_back(from_depth[i]);
                 }
             }
             const Eigen::Vector2d was = target_px_;
@@ -139,25 +160,29 @@ TrackResult Tracker::update(const cv::Mat &gray, const std::vector<Eigen::Vector
         }
     }
     r.inlier.resize(r.to.size(), 0);
+    // The target's depth moves by the inliers' median change in their own depth, which no mix of corners can bias.
     const std::vector<double> depths = depthsAt(kept, points);
-    if (kept.size() >= 3 && !depths.empty()) {
-        // Taken from the first consensus rather than the seeds, so an arm already inside the gate cannot bias it.
-        r.depth = median(depths);
-        if (!calibrated_) {
-            target_above_ = -target_.z() - r.depth;
-            calibrated_   = true;
+    std::vector<double>       change;
+    for (size_t i = 0; i < kept.size(); ++i) {
+        if (!std::isnan(depths[i]) && !std::isnan(kept_depth[i])) {
+            change.push_back(depths[i] - kept_depth[i]);
         }
-        r.proud = target_above_;
-        target_ = unproject(target_px_, r.depth + target_above_);
-        r.ok    = true;
     }
-    points_ = kept;
+    if (kept.size() >= 3 && !change.empty()) {
+        depth_change_ = median(change);
+        r.depth       = -start_target_.z() + depth_change_;
+        target_       = unproject(target_px_, r.depth);
+        smoothed_     = s_.ema_alpha * (target_ - start_target_) + (1.0 - s_.ema_alpha) * smoothed_;
+        r.ok          = true;
+    }
+    points_      = kept;
+    start_depth_ = kept_depth;
     if (static_cast<int>(points_.size()) < s_.min_points) {
-        seed(gray, gateMask(points));
+        seed(gray, gateMask(points), points);
         r.reseeded = true;
     }
     previous_ = gray.clone();
-    r.target_px = target_px_, r.target = target_, r.offset = target_ - start_target_;
+    r.target_px = target_px_, r.target = start_target_ + smoothed_, r.offset = smoothed_;
     return r;
 }
 

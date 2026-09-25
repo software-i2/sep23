@@ -17,6 +17,7 @@ struct TrackSettings {
     int    max_points = 0;
     double ransac_px  = 0.0;
     double min_face   = 0.0;  // share of the face seen at the start below which tracking stops for good
+    double ema_alpha  = 1.0;  // each frame's weight in the running average of the offset; 1 takes every frame raw
 };
 
 // What one frame of tracking found. Points are pixels; the target is in camera_link (x right, y up, looking down -z).
@@ -25,13 +26,13 @@ struct TrackResult {
     Eigen::Vector2d          target_px = Eigen::Vector2d::Zero();
     Eigen::Vector2d          start_px  = Eigen::Vector2d::Zero();       // where the target was when tracking started
     Eigen::Vector3d          target    = Eigen::Vector3d::Zero();
-    Eigen::Vector3d          offset    = Eigen::Vector3d::Zero();  // target now minus target when tracking started
+    Eigen::Vector3d          offset    = Eigen::Vector3d::Zero();  // target now minus at the start, averaged over frames (ema_alpha)
     std::vector<cv::Point2f> from, to;                             // every flowed point, previous frame then this one
     std::vector<uint8_t>     inlier;                               // per flowed point: in the 2D consensus
     size_t                   lost = 0;                             // points KLT or the gate dropped this frame
     Eigen::Vector2d          moved_px = Eigen::Vector2d::Zero();   // how this frame's RANSAC similarity moved the target pixel
     double                   rotation = 0.0, scale = 1.0;          // that similarity's turn (rad) and zoom
-    double                   depth = 0.0, proud = 0.0;             // the inliers' median depth, and the target's depth minus it
+    double                   depth = 0.0;                          // the target's depth, this frame
     bool                     reseeded = false;
     cv::Mat                  mask;                                 // 255 inside the depth gate and ROI: the face tracked
     double                   face    = 1.0;                        // the mask's area over its area when tracking started
@@ -39,7 +40,8 @@ struct TrackResult {
 };
 
 // Follows the target through the arm's occlusion: KLT on the full-resolution image inside a depth gate around the target,
-// one 2D similarity by RANSAC moves the target pixel, and only the inliers' cloud points give it depth.
+// one 2D similarity by RANSAC moves the target pixel, and the inliers' own depth changes since they were seeded move its
+// depth. Not their median depth: the corners left on a tilted face change with what hides it, and that would move the target.
 class Tracker {
 public:
     Tracker(const TrackSettings &s, const CameraModel &camera) : s_(s), camera_(camera) {}
@@ -57,17 +59,19 @@ private:
     cv::Mat              gateMask(const std::vector<Eigen::Vector3f> &points) const;
     std::vector<double>  depthsAt(const std::vector<cv::Point2f> &px, const std::vector<Eigen::Vector3f> &points) const;
     Eigen::Vector3d      unproject(const Eigen::Vector2d &px, double depth) const;
-    void                 seed(const cv::Mat &gray, const cv::Mat &mask);
+    void                 seed(const cv::Mat &gray, const cv::Mat &mask, const std::vector<Eigen::Vector3f> &points);
 
     TrackSettings            s_;
     CameraModel              camera_;
-    bool                     active_ = false, seeded_ = false, calibrated_ = false, covered_ = false;
+    bool                     active_ = false, seeded_ = false, covered_ = false;
     double                   face_at_start_ = 0.0;
     Eigen::Vector3d          start_target_ = Eigen::Vector3d::Zero(), target_ = Eigen::Vector3d::Zero();
     Eigen::Vector2d          target_px_ = Eigen::Vector2d::Zero(), start_px_ = target_px_;
-    double                   target_above_ = 0.0;  // the target's depth minus its first inliers' median: a handle stands proud
     cv::Mat                  previous_;
     std::vector<cv::Point2f> points_;
+    std::vector<double>      start_depth_;  // per point: its depth when seeded, less the depth change up to then (NaN: none)
+    double                   depth_change_ = 0.0;                   // the inliers' median depth change since the start
+    Eigen::Vector3d          smoothed_     = Eigen::Vector3d::Zero();  // the offset's running average
 };
 
 enum class TrackView { RANSAC, KLT, MASK };
