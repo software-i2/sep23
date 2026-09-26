@@ -127,7 +127,7 @@ ArmConfig loadArm(Params &robot, const std::string &urdf, PickConfig &c) {
     c.jaw_name   = robot.text("arm/joint_names/jaw");
     c.jaw_closed = robot.numbers("jaws/limits_m", 2)[0];
     JawShape &jaw             = a.jaw;
-    jaw.open_width            = robot.number("jaws/open_m");
+    jaw.open_len              = robot.number("jaws/open_m");
     jaw.mount_to_throat       = robot.number("jaws/mount_to_throat_m");
     jaw.mount_to_tip          = robot.number("jaws/mount_to_tip_m");
     jaw.palm_length           = robot.number("jaws/palm_length_m");

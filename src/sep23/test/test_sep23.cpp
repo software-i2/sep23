@@ -39,7 +39,7 @@ ArmConfig testArm(const std::string &urdf) {
     c.min      = {{0.0, 0.0, 0.0, 0.0}};
     c.max      = {{rad(349.6), rad(200.0), rad(184.5), rad(184.5)}};
     c.jaw.mount_to_tip = 0.0969;
-    c.jaw.open_width   = 0.007;
+    c.jaw.open_len     = 0.007;
     c.jaw.blades       = {{0.0, 0.05, -0.02, 0.005, 0.005}};
     return c;
 }

@@ -52,7 +52,7 @@ struct JawShape {
     double                 mount_to_throat       = 0.0;
     double                 mount_to_tip          = 0.0;
     double                 palm_length           = 0.0;
-    double                 open_width            = 0.0;
+    double                 open_len              = 0.0;
     double                 hinge_roll_at_zero    = 0.0;
     double                 blade_rotation_per_m  = 0.0;
     double                 hinge_offset_closing  = 0.0;

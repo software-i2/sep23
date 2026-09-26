@@ -100,8 +100,8 @@ Arm::Arm(const ArmConfig &config, double blade_step) : config_(config) {
 
     // Blade samples in the jaw mount frame: x down the approach, y along the hinge, z along the closing line.
     const JawShape &jaw = config_.jaw;
-    const double    c   = std::cos(jaw.open_width * jaw.blade_rotation_per_m);
-    const double    s   = std::sin(jaw.open_width * jaw.blade_rotation_per_m);
+    const double    c   = std::cos(jaw.open_len * jaw.blade_rotation_per_m);
+    const double    s   = std::sin(jaw.open_len * jaw.blade_rotation_per_m);
     const auto      steps = [&](double span) { return std::max(1, static_cast<int>(std::ceil(span / blade_step))); };
     for (const double side : {1.0, -1.0}) {
         for (const BladeBand &band : jaw.blades) {
