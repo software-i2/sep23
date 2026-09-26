@@ -1,16 +1,16 @@
 <?xml version="1.0"?>
 <!-- Copyright by BeeX [2026] -->
 <launch>
-    <arg name="sim" default="false" doc="simulated arm instead of the serial port"/>
-    <arg name="bag" default="" doc="bag replayed in a loop instead of the live camera, e.g. $(find sep23)/../../data/x.bag"/>
-    <arg name="bag_rate" default="1.0" doc="10 suits captures_grasp_poses.bag, recorded a frame every 5 to 10 s"/>
-    <arg name="vision" default="false" doc="run axis_grasp and take its grasp poses"/>
+    <arg name="sim" default="false" doc="simulated arm"/>
+    <arg name="bag" default="" doc="bag file to replay"/>
+    <arg name="bag_rate" default="1.0" doc="rate at which to play the bag"/>
+    <arg name="vision" default="false" doc="run axis_grasp and take grasp poses"/>
     <arg name="foxglove" default="true"/>
     <!-- add-ons, exp/: off unless asked for -->
-    <arg name="synthetic" default="false" doc="SYNTHETIC camera instead of the replay: the bag's first frame swaying along a known path"/>
-    <arg name="amplitude_m" default="0.02" doc="synthetic sway either side; 0 holds it still"/>
-    <arg name="occluded" default="false" doc="paint an obstacle over the camera while the arm moves blind"/>
-    <arg name="cover" default="100" doc="the most of the frame the obstacle covers, percent"/>
+    <arg name="synthetic" default="false" doc="synthetic camera"/>
+    <arg name="amplitude_m" default="0.02" doc="synthetic sway in x y z"/>
+    <arg name="occluded" default="false" doc="simulate occlusion"/>
+    <arg name="cover" default="0" doc="percent of frame occluded"/>
     <arg name="config" value="$(find sep23)/config"/>
 
     <arg name="camera_fixed_in_world" value="$(eval synthetic or bag != '')"/>  <!-- a replay saw the scene from one place -->
