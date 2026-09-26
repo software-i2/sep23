@@ -17,12 +17,12 @@ Put `captures_grasp_poses.bag` in `data/`.
 scripts/shell.sh                   # shell 1
 roslaunch sep23 pick.launch sim:=true vision:=true bag:="$PWD/data/captures_grasp_poses.bag"   # simulated arm, bag on a loop
 scripts/shell.sh                   # shell 2
-scripts/soak.sh                    # 600 s of picks with steering; scripts/soak.sh 600 false without
+scripts/loop.sh                    # 600 s of picks with steering; scripts/loop.sh 600 false without
 ```
 
 Add-ons from `src/sep23/exp/`, off unless asked for:
 - `occluded:=true cover:=100`: an obstacle painted over the camera while the arm moves blind, covering up to `cover` percent
-- `synthetic:=true amplitude_m:=0.02`: SYNTHETIC camera, the bag's first frame swaying along a known path instead of the replay; `YAW_DEG=180 scripts/soak.sh` turns it a random yaw each attempt
+- `synthetic:=true amplitude_m:=0.02`: SYNTHETIC camera, the bag's first frame swaying along a known path instead of the replay; `YAW_DEG=180 scripts/loop.sh` turns it a random yaw each attempt
 
 Real arm: `roslaunch sep23 pick.launch vision:=true`.
 
@@ -31,7 +31,7 @@ Foxglove: `ws://localhost:8765`, display frame `world_locked`.
 - `/occluder/image`: the pick's raw camera, unlabelled on purpose (text would give the tracker corners to follow)
 - `/non_occluded/pointcloud`: what the camera still sees (the pick's cloud); `/occluded/pointcloud`: what the obstacle hides
 
-`soak.sh` prints one line per attempt; `on the handle` is the pass/fail for the blind motion.
+`loop.sh` prints one line per attempt; `on the handle` is the pass/fail for the blind motion.
 
 ## Config
 

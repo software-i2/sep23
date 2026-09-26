@@ -366,7 +366,7 @@ public:
                 run_started_                        = ros::Time::now();
                 map_pub_.publish(mapCloud(ObstacleMap(), Eigen::Isometry3d::Identity(), c_.world_frame));
                 clearTrails();
-                ros::param::get("~track/steer", c_.track_steer);  // scripts/soak.sh sets it
+                ros::param::get("~track/steer", c_.track_steer);  // scripts/loop.sh sets it
                 apply(Event::START, c_.track_steer ? "started, steering" : "started, not steering");
             }
         }
@@ -540,7 +540,7 @@ private:
         return true;
     }
 
-    // Puts the simulated vehicle back at the origin and the arm home, so a soak repeats a pick from the same place.
+    // Puts the simulated vehicle back at the origin and the arm home, so a loop repeats a pick from the same place.
     bool onReset(std_srvs::Trigger::Request &, std_srvs::Trigger::Response &res) {
         res.success = !working_;
         res.message = res.success ? "vehicle back at the origin" : "a pick is running, stop it first";

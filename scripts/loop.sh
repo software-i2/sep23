@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Repeats the pick and counts outcomes. usage: scripts/soak.sh [seconds = 600] [steer = true]
-# env: YAW_DEG=180 turns the synthetic mine (synthetic:=true) a random whole degree within +-YAW_DEG each attempt; ATTEMPT_TIMEOUT=120
+# loops the mission for X seconds, with random yaw each time
 set -uo pipefail
 DURATION="${1:-600}"
 STEER="${2:-true}"
 ATTEMPT_TIMEOUT="${ATTEMPT_TIMEOUT:-120}"
 YAW_DEG="${YAW_DEG:-0}"
-case "$STEER" in true | false) ;; *) echo "[soak] steer $STEER is not true or false" >&2; exit 1 ;; esac
+case "$STEER" in true | false) ;; *) echo "[loop] steer $STEER is not true or false" >&2; exit 1 ;; esac
 rosparam set /pick/track/steer "$STEER"  # the pick reads it on every start
 field() { rostopic echo -n1 "$1" 2>/dev/null | head -1 | tr -d '"'; }
 

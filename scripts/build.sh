@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the workspace in the Noetic image. usage: scripts/build.sh [catkin build args], e.g. --no-deps sep23
+# Builds the workspace in the Noetic image.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${IMAGE:-sep23:noetic}"

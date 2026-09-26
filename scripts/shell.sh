@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A shell in the Noetic container with the workspace sourced; run again for another shell in the same one.
+# shell in the Noetic container + workspace sourced.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${IMAGE:-sep23:noetic}"
@@ -11,5 +11,5 @@ if [ -n "$(docker ps -q --filter "name=^${NAME}$")" ]; then
 fi
 DEVICE=()
 [ -e "$PORT" ] && DEVICE=(--device "$PORT:$PORT") || echo "[!] $PORT not present: sim:=true only"
-exec docker run --rm -it --name "$NAME" --network host "${DEVICE[@]}" -e WS="$ROOT" -v "$ROOT:$ROOT" -w "$ROOT" "$IMAGE" bash -c "echo '[*] roslaunch sep23 pick.launch sim:=true bag:=\$PWD/data/captures_grasp_poses.bag    then in a second shell: scripts/soak.sh'
+exec docker run --rm -it --name "$NAME" --network host "${DEVICE[@]}" -e WS="$ROOT" -v "$ROOT:$ROOT" -w "$ROOT" "$IMAGE" bash -c "echo '[*] roslaunch sep23 pick.launch sim:=true bag:=\$PWD/data/captures_grasp_poses.bag    then in a second shell: scripts/loop.sh'
     exec bash"
