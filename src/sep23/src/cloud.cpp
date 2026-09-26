@@ -404,18 +404,6 @@ std::vector<GraspPose> agreeOnSpots(const std::vector<std::vector<GraspPose>> &f
     return spots;
 }
 
-Eigen::Vector3d nearestOnHandle(const std::vector<GraspPose> &poses, double half_length, const Eigen::Vector3d &p) {
-    Eigen::Vector3d best = poses.front().point;
-    for (const GraspPose &g : poses) {
-        const Eigen::Vector3d along = unit(g.bar);
-        const Eigen::Vector3d near  = g.point + std::min(std::max((p - g.point).dot(along), -half_length), half_length) * along;
-        if ((near - p).squaredNorm() < (best - p).squaredNorm()) {
-            best = near;
-        }
-    }
-    return best;
-}
-
 Scene processFrames(const std::vector<Frame> &frames, const CameraModel &camera, const CloudSettings &s) {
     Scene scene;
     if (frames.empty()) {

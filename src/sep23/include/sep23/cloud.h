@@ -76,6 +76,4 @@ std::vector<GraspPose> agreeOnSpots(const std::vector<std::vector<GraspPose>> &f
 
 double median(std::vector<double> v);
 
-Eigen::Vector3d nearestOnHandle(const std::vector<GraspPose> &poses, double half_length, const Eigen::Vector3d &p);
-
 }  // namespace sep23

@@ -273,10 +273,4 @@ bool Arm::rollsAcrossBar(const Joints &q, const Eigen::Vector3d &bar, double rol
     return true;
 }
 
-Eigen::Vector3d Arm::inJaw(const Joints &q, const Eigen::Vector3d &p) const {
-    const JawAxes         a = axes(q);
-    const Eigen::Vector3d d = p - points(q).mount;
-    return {a.approach.dot(d), a.hinge.dot(d), a.closing.dot(d)};
-}
-
 }  // namespace sep23

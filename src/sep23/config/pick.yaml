@@ -13,8 +13,6 @@ jaw:
   settle_time_s: 1.0
   grabbed_margin_m: 0.005                # check that handle is actually grabbed
   timeout_s: 5.0
-  catch_reach_m: 0.070                   # params for testing 
-  catch_off_centre_m: 0.010              # params for testing
   close_within_m: 0.005
   close_hold_s: 2.0
 

@@ -201,20 +201,6 @@ TEST(Arm, InverseKinematicsRecoversEveryFrontFacingPosture) {
     EXPECT_GT(front, 200);
 }
 
-TEST(Arm, TellsWhatTheJawCaught) {
-    ArmConfig c           = testArm(expandedUrdf());
-    const Arm             arm(c, 0.005);
-    const Joints          q{{0.3, 1.2, 0.8, -0.5}};
-    const JawAxes         a     = arm.axes(q);
-    const Eigen::Vector3d grasp = arm.points(q).mount + 0.06 * a.approach;
-    const auto            caught = [&](const Eigen::Vector3d &p) { return Arm::caught(arm.inJaw(q, p), 0.07, 0.01); };
-    EXPECT_TRUE(caught(grasp));
-    EXPECT_TRUE(caught(grasp + 0.006 * a.hinge + 0.007 * a.closing));
-    EXPECT_FALSE(caught(grasp + 0.011 * a.closing)) << "off centre";
-    EXPECT_FALSE(caught(grasp + 0.011 * a.approach)) << "past 70 mm";
-    EXPECT_FALSE(caught(grasp - 0.07 * a.approach)) << "behind the mount";
-}
-
 TEST(Collision, InflatesObstaclesAndKeepsHandleExact) {
     ObstacleMap map;
     map.box.voxel  = 0.01;
@@ -386,13 +372,6 @@ TEST(Cloud, ConsensusKeepsWhatFramesAgreeOn) {
         EXPECT_NEAR(g.point.z(), 0.3, 1e-9);
     }
     EXPECT_TRUE(agreeOnSpots({frames[0]}, s, summary).empty()) << "one frame cannot agree with itself";
-}
-
-TEST(Cloud, HandleRunsAlongEachPoseBar) {
-    const Eigen::Vector3d        x = Eigen::Vector3d::UnitX(), z = Eigen::Vector3d::UnitZ();
-    const std::vector<GraspPose> bar = {{{0.05, 0.0, 0.0}, x, z}, {{0.0, 0.0, 0.0}, -x, z}};  // any order, either way along
-    EXPECT_LT((nearestOnHandle(bar, 0.0075, {0.004, 0.002, 0.0}) - Eigen::Vector3d(0.004, 0.0, 0.0)).norm(), 1e-12);
-    EXPECT_LT((nearestOnHandle(bar, 0.0075, {0.02, 0.002, 0.0}) - Eigen::Vector3d(0.0075, 0.0, 0.0)).norm(), 1e-12) << "past the bar's end";
 }
 
 // A tilted wall with scattered missing pixels and one pixel floating in front of it: the filter keeps the wall, drops the spike.

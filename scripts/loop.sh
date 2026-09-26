@@ -9,7 +9,7 @@ case "$STEER" in true | false) ;; *) echo "[loop] steer $STEER is not true or fa
 rosparam set /pick/track/steer "$STEER"  # the pick reads it on every start
 field() { rostopic echo -n1 "$1" 2>/dev/null | head -1 | tr -d '"'; }
 
-started=$SECONDS attempts=0 success=0 grabbed=0 on_handle=0 failed=0 timed_out=0
+started=$SECONDS attempts=0 success=0 grabbed=0 failed=0 timed_out=0
 while [ $((SECONDS - started)) -lt "$DURATION" ]; do
     yaw=$((RANDOM % (2 * YAW_DEG + 1) - YAW_DEG))
     [ "$YAW_DEG" -gt 0 ] && rosparam set /synthetic/yaw_deg "$yaw"  # before the reset, so the next look already sees it turned
@@ -27,7 +27,6 @@ while [ $((SECONDS - started)) -lt "$DURATION" ]; do
     SUCCESS)
         success=$((success + 1))
         [ "$(field /pick/state/grabbed)" = True ] && grabbed=$((grabbed + 1))
-        [ "$(field /pick/state/on_handle)" = True ] && on_handle=$((on_handle + 1)) && state="$state on the handle"
         ;;
     FAIL | ESTOP) failed=$((failed + 1)) ;;
     *) timed_out=$((timed_out + 1)); rosservice call /pick/stop >/dev/null 2>&1; state="timed out in ${state:-?}" ;;
@@ -35,4 +34,4 @@ while [ $((SECONDS - started)) -lt "$DURATION" ]; do
     echo "[*] attempt $attempts, yaw $yaw deg: $state in $((SECONDS - begin)) s"
 done
 rosservice call /pick/stop >/dev/null 2>&1
-echo "steer $STEER, yaw +-$YAW_DEG deg, over $((SECONDS - started)) s: $attempts attempts, $success SUCCESS ($grabbed with a grip, $on_handle on the handle), $failed failed, $timed_out timed out"
+echo "steer $STEER, yaw +-$YAW_DEG deg, over $((SECONDS - started)) s: $attempts attempts, $success SUCCESS ($grabbed with a grip), $failed failed, $timed_out timed out"

@@ -100,7 +100,7 @@ struct PickConfig {
     double                               stream_timeout_s = 0.0, spot_search_s = 0.0, repark_search_s = 0.0;
     int                                  retarget_attempts = 0, park_attempts = 0;
     double                               jaw_settle_tolerance = 0.0, jaw_settle_time_s = 0.0, jaw_grabbed_margin = 0.0, jaw_timeout_s = 0.0;
-    double                               catch_reach = 0.0, catch_off_centre = 0.0, close_within = 0.0, close_hold_s = 0.0;
+    double                               close_within = 0.0, close_hold_s = 0.0;
 };
 
 Eigen::Isometry3d fromXyzRpy(const std::vector<double> &xyz, const std::vector<double> &rpy_deg) {
@@ -171,8 +171,6 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
     c.jaw_settle_time_s     = pick.number("jaw/settle_time_s");
     c.jaw_grabbed_margin    = pick.number("jaw/grabbed_margin_m");
     c.jaw_timeout_s         = pick.number("jaw/timeout_s");
-    c.catch_reach           = pick.number("jaw/catch_reach_m");
-    c.catch_off_centre      = pick.number("jaw/catch_off_centre_m");
     c.close_within          = pick.number("jaw/close_within_m");
     c.close_hold_s          = pick.number("jaw/close_hold_s");
     pick.require(c.loop_hz > 0.0 && c.joint_state_timeout_s > 0.0, "loop_hz", "positive, with a positive joint_state_timeout_s");
@@ -330,7 +328,6 @@ public:
         map_pub_     = pnh.advertise<sensor_msgs::PointCloud2>("pick_map", 1, true);
         grasp_pub_   = pnh.advertise<visualization_msgs::MarkerArray>("grasps", 1, true);
         path_pub_    = pnh.advertise<visualization_msgs::Marker>("path", 1, true);
-        handle_pub_  = pnh.advertise<visualization_msgs::Marker>("handle_check", 1, true);
         body_pub_    = pnh.advertise<visualization_msgs::MarkerArray>("body", 1);
         hull_pub_    = pnh.advertise<visualization_msgs::Marker>("hull", 1, true);
         hull_pub_.publish(hullMarker(c_.hull, c_.arm_frame));
@@ -361,7 +358,7 @@ public:
                 ROS_WARN("[pick] start ignored: already in %s", stateName(state_));
             } else {
                 park_attempt_ = look_attempt_ = 0;
-                grabbed_ = on_handle_ = false;
+                grabbed_ = false;
                 surveying_since_ = reparking_since_ = ros::Time();
                 run_started_                        = ros::Time::now();
                 map_pub_.publish(mapCloud(ObstacleMap(), Eigen::Isometry3d::Identity(), c_.world_frame));
@@ -581,10 +578,6 @@ private:
         char         line[200];
         switch (next) {
         case State::GOTOGRASP: {
-            {
-                std::lock_guard<std::mutex> lock(sensor_mutex_);
-                frames_.clear();  // what arrives during the motion is what handleCheck() judges the end against
-            }
             // follow the chosen candidate from where the grasp look saw it.
             if (!c_.track_enabled) {
                 break;
@@ -941,7 +934,7 @@ private:
             } else if ((stamp - near_since_).toSec() >= c_.close_hold_s) {
                 char line[120];
                 std::snprintf(line, sizeof(line), "held %.1f mm from the aimed target for %.1f s", 1000 * off, c_.close_hold_s);
-                message = line + motionReport(q);
+                message = line + motionReport();
                 return Event::REACHED;
             }
         }
@@ -958,31 +951,30 @@ private:
         }
         switch (state) {
         case Following::REACHED:
-            message = "reached the end of the path" + motionReport(arm_.toModel(reported));
+            message = "reached the end of the path" + motionReport();
             return Event::REACHED;
         case Following::STALLED:
             releaseArm();
             message = "did not arrive within the arrival timeout, arm released";
             return Event::STALLED;
         case Following::BLOCKED:
-            message = c_.joint_names[follower_.blockedJoint()] + " stopped following, so the arm hit something" + motionReport(arm_.toModel(reported));
+            message = c_.joint_names[follower_.blockedJoint()] + " stopped following, so the arm hit something" + motionReport();
             return Event::COLLIDED;
         default:
             return Event::NONE;
         }
     }
 
-    // Where the jaw is against the handle, and what the tracker and steering did on the way there.
-    std::string motionReport(const Joints &q) {
-        std::string out = handleCheck(q);
+    // What the tracker and steering did on the way there.
+    std::string motionReport() {
         if (!c_.track_enabled) {
-            return out;
+            return "";
         }
         std::lock_guard<std::mutex> lock(track_mutex_);
         char                        line[120];
         std::snprintf(line, sizeof(line), "; the tracker saw the target move %.1f mm (%s)", 1000 * track_.offset.norm(),
                       track_.covered ? "face covered, open loop" : track_.ok ? "tracking" : "not tracking");
-        out += line;
+        std::string out = line;
         if (c_.track_steer) {
             const double behind = (scene_camera_to_arm_.linear() * track_.offset - aimed_).norm();
             std::snprintf(line, sizeof(line), "; %d retargets left the goal %.1f mm from it", retargets_, 1000 * behind);
@@ -1025,44 +1017,6 @@ private:
         return Event::NONE;
     }
 
-    // Pass or fail for the blind motion: whether the jaw ended with the handle between its open blades, the handle drawn
-    // from the newest grasp poses seen during the motion. A replayed bag's poses are unoccluded, so they show where the
-    // handle really went; a live camera's are not trustworthy with the arm in view.
-    std::string handleCheck(const Joints &q) {
-        on_handle_ = false;
-        std::vector<GraspPose> handle;
-        {
-            std::lock_guard<std::mutex> lock(sensor_mutex_);
-            if (frames_.empty()) {
-                return "; no grasp poses during the motion to check the jaw against";
-            }
-            const Eigen::Isometry3d &t = frames_.back().camera_to_arm;
-            for (const GraspPose &g : frames_.back().poses) {
-                handle.push_back({t * g.point, t.linear() * g.bar, t.linear() * g.approach});
-            }
-        }
-        const double          along   = c_.plan.grasp_point_from_mount;
-        const Eigen::Vector3d grasp   = arm_.points(q).mount + arm_.axes(q).approach * along;
-        const Eigen::Vector3d planned = scene_.candidates[plan_.candidate].point;
-        const Eigen::Vector3d j       = arm_.inJaw(q, nearestOnHandle(handle, 0.5 * c_.cloud.bar_gap, grasp));
-        on_handle_                    = Arm::caught(j, c_.catch_reach, c_.catch_off_centre);
-        // The handle judged, as each pose's bar: green on it, red missed.
-        visualization_msgs::Marker bars = marker(c_.arm_frame, "handle_check", visualization_msgs::Marker::LINE_LIST, on_handle_ ? 0.1f : 1.0f,
-                                                 on_handle_ ? 1.0f : 0.1f, 0.1f, 1.0f, 0.002);
-        for (const GraspPose &g : handle) {
-            const Eigen::Vector3d half = 0.5 * c_.cloud.bar_gap * g.bar.normalized();
-            bars.points.push_back(toPoint(g.point - half));
-            bars.points.push_back(toPoint(g.point + half));
-        }
-        handle_pub_.publish(bars);
-        char line[200];
-        std::snprintf(line, sizeof(line),
-                      "; %s: it sits %+.1f %+.1f %+.1f mm from the grasp point (approach, hinge, closing); the planned target is %.1f mm off it",
-                      on_handle_ ? "ON THE HANDLE" : "MISSED THE HANDLE", 1000 * (j.x() - along), 1000 * j.y(), 1000 * j.z(),
-                      1000 * (nearestOnHandle(handle, 0.5 * c_.cloud.bar_gap, planned) - planned).norm());
-        return line;
-    }
-
     bool releaseArm() {
         std_srvs::Trigger call;
         return standby_.call(call) && call.response.success;
@@ -1076,7 +1030,6 @@ private:
         msg.message      = message;
         msg.park_attempt = park_attempt_;
         msg.grabbed      = grabbed_;
-        msg.on_handle    = on_handle_;
         state_pub_.publish(msg);
         char timing[80] = "";
         if (spent >= 0.0) {
@@ -1137,8 +1090,6 @@ private:
         visualization_msgs::Marker line = marker(c_.arm_frame, "path", visualization_msgs::Marker::LINE_STRIP, 0, 0, 0, 0, 0);
         line.action                      = visualization_msgs::Marker::DELETE;
         path_pub_.publish(line);
-        line.ns = "handle_check";
-        handle_pub_.publish(line);
         if (c_.track_enabled) {
             visualization_msgs::MarkerArray wipe;
             wipe.markers.push_back(marker(c_.camera_frame, "", visualization_msgs::Marker::ARROW, 0, 0, 0, 0, 0));
@@ -1186,7 +1137,7 @@ private:
     std::string                                                                  steer_note_;  // what steering last did
     Eigen::Vector3d                                                              steer_aim_ = Eigen::Vector3d::Zero();  // its shift, arm frame
     ros::Subscriber                   joints_sub_;
-    ros::Publisher                    targets_pub_, state_pub_, park_map_pub_, map_pub_, grasp_pub_, path_pub_, handle_pub_, body_pub_, hull_pub_;
+    ros::Publisher                    targets_pub_, state_pub_, park_map_pub_, map_pub_, grasp_pub_, path_pub_, body_pub_, hull_pub_;
     ros::ServiceClient                close_jaw_, standby_, home_;
     std::vector<ros::ServiceServer>   services_;
     ros::Timer                        tf_timer_;
@@ -1205,7 +1156,7 @@ private:
 
     std::atomic<bool> start_requested_{false}, stop_requested_{false}, working_{false};
     State             state_ = State::READY;
-    bool              spot_phase_ = true, grabbed_ = false, on_handle_ = false;
+    bool              spot_phase_ = true, grabbed_ = false;
     uint32_t          park_attempt_ = 0, look_attempt_ = 0;
     long              ticks_ = 0;
     ros::Time         entered_ = ros::Time::now(), run_started_, surveying_since_, reparking_since_, last_stamp_;
