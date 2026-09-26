@@ -27,7 +27,7 @@ struct VoxelBox {
     void            coords(long cell, long &x, long &y, long &z) const;
 };
 
-// Occupied cells in the arm base frame; handle cells are the part the blades may close on.
+// Occupied cells in the arm base frame
 struct ObstacleMap {
     VoxelBox              box;
     std::vector<uint32_t> obstacle, handle;
@@ -62,23 +62,20 @@ struct CloudSettings {
 
 // What a look produced, in the arm base frame.
 struct Scene {
-    std::vector<GraspPose> poses;       // newest frame, uncropped
-    std::vector<GraspPose> candidates;  // what the arm could reach after a park move
+    std::vector<GraspPose> poses;       
+    std::vector<GraspPose> candidates;  
     ObstacleMap            map;
     std::string            summary;
 };
 
-// Frames oldest first; each stage follows its switch in `s`.
 Scene processFrames(const std::vector<Frame> &frames, const CameraModel &camera, const CloudSettings &s);
 
-// Spots on the bar that at least min_frames frames agree on, averaged. Frames oldest first.
+// Spots on the bar that at least min_frames frames agree on, averaged.
 std::vector<GraspPose> agreeOnSpots(const std::vector<std::vector<GraspPose>> &frames, const CloudSettings &s,
                                     std::string &summary);
 
-// The middle value of a non-empty list.
 double median(std::vector<double> v);
 
-// The point nearest `p` on the handle the poses draw: each pose stands for its bar out to `half_length` either side. Not empty.
 Eigen::Vector3d nearestOnHandle(const std::vector<GraspPose> &poses, double half_length, const Eigen::Vector3d &p);
 
 }  // namespace sep23

@@ -3,7 +3,7 @@
 import copy
 import numpy as np
 
-SWEEP_S = 10.0  # time to ramp up to full cover
+FILL_S = 10.0  # time to ramp up to full cover
 
 
 def roll(rng):
@@ -19,7 +19,7 @@ def waves(terms, x):
 
 def coverage(cover, t, dice):
     """Fraction of the frame covered t s after switch-on, with a random pace and sway. The sweep is linear, the sway is sinusoidal."""
-    return cover * float(np.clip(min(t / (SWEEP_S * dice["pace"]), 1.0) + waves(dice["sway"], t), 0.0, 1.0))
+    return cover * float(np.clip(min(t / (FILL_S * dice["pace"]), 1.0) + waves(dice["sway"], t), 0.0, 1.0))
 
 
 def obstacle_mask(shape, cover, angle_deg, edge=()):
