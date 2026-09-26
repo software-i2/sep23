@@ -186,6 +186,7 @@ private:
     std::vector<std::string> errors_;
 };
 
+#if defined(SEP23_PICK)
 inline geometry_msgs::Point toPoint(const Eigen::Vector3d &v) {
     geometry_msgs::Point p;
     p.x = v.x();
@@ -500,6 +501,7 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
     pick.require(t.min_face >= 0.0 && t.min_face < 1.0, "track/min_face_visible", "at least 0 and below 1");
     pick.require(t.ema_alpha > 0.0 && t.ema_alpha <= 1.0, "track/ema_alpha", "above 0 and at most 1");
 }
+#endif
 
 void rosLog(const char *node, Level level, const std::string &text) {
     switch (level) {
@@ -509,6 +511,7 @@ void rosLog(const char *node, Level level, const std::string &text) {
     }
 }
 
+#if defined(SEP23_DRIVER)
 // ============================================================================================================================
 // driver: joint_states out, joint targets in, and the jaw, home and standby as services.
 // ============================================================================================================================
@@ -649,7 +652,9 @@ int runDriver(int argc, char **argv) {
     driver.standby(released);
     return 0;
 }
+#endif
 
+#if defined(SEP23_PICK)
 // ============================================================================================================================
 // pick: PickIO over topics and the driver's services, and the sensors, requests and TF around Pick.
 // ============================================================================================================================
@@ -983,6 +988,7 @@ int runPick(int argc, char **argv) {
     }
     return 0;
 }
+#endif
 
 }  // namespace
 
