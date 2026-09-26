@@ -39,9 +39,7 @@ struct TrackResult {
     bool                     covered = false;                      // too little face left: stopped until the next start
 };
 
-// Follows the target through the arm's occlusion: KLT on the full-resolution image inside a depth gate around the target,
-// one 2D similarity by RANSAC moves the target pixel, and the inliers' own depth changes since they were seeded move its
-// depth. Not their median depth: the corners left on a tilted face change with what hides it, and that would move the target.
+// Follows the target through occlusion: gated KLT corners, a RANSAC similarity moves its pixel, the inliers' median depth change moves its depth.
 class Tracker {
 public:
     Tracker(const TrackSettings &s, const CameraModel &camera) : s_(s), camera_(camera) {}
@@ -54,7 +52,7 @@ public:
 
     // Grey image and its organised cloud (one camera_link point per pixel, row-major).
     TrackResult update(const cv::Mat &gray, const std::vector<Eigen::Vector3f> &points);
-
+s
 private:
     cv::Mat              gateMask(const std::vector<Eigen::Vector3f> &points) const;
     std::vector<double>  depthsAt(const std::vector<cv::Point2f> &px, const std::vector<Eigen::Vector3f> &points) const;

@@ -6,19 +6,19 @@ namespace sep23 {
 // COLLECT and PROCESS run twice: once to choose where to park, once to choose what to grab from there.
 enum class State {
     READY,      // waiting for start
-    STREAM,     // waiting for the camera to produce
-    COLLECT,    // gathering a window of frames
-    PROCESS,    // turning them into an obstacle map and candidates
-    PICKSPOT,   // searching for somewhere to park
-    GOTOSPOT,   // driving there
-    RESURVEY,   // nothing in view to park for; survey again inside the budget
+    STREAM,     // waiting for the camera 
+    COLLECT,    // picking up 5 frames
+    PROCESS,    // deriving obstacles and grasp candidates from the frames
+    PICKSPOT,   // searching for parking spot
+    GOTOSPOT,   // following to parking spot
+    RESURVEY,   // cant find a spot; take new frames and try again
     PICKGRASP,  // planning a path to a handle
-    GOTOGRASP,  // following it
-    CLOSEJAW,   // closing on the handle and reading what was caught
-    RETARGET,   // nothing to grab from this spot; look again
-    REPARK,     // out of looks; park somewhere else
-    SUCCESS,
-    FAIL,
+    GOTOGRASP,  // following to handle
+    CLOSEJAW,   // closing on the handle
+    RETARGET,   // cant find a path to handle; take new frames and try again
+    REPARK,     // used up all retargets; move to new parking spot
+    SUCCESS,    // sequence complete, regardless if jaw caught anything or not
+    FAIL,       // something went wrong
     ESTOP       // contact or a stop request; the arm is released
 };
 
@@ -36,14 +36,14 @@ enum class Event {
     SURVEY_AGAIN,
     OUT_OF_TIME,
     SPOT_CHOSEN,
-    SPOT_UNCHANGED,  // staying is best, so nothing drives
+    SPOT_UNCHANGED, 
     NO_SPOT,
     ARRIVED,
     PLAN_FOUND,
     NO_PLAN,
     REACHED,
     STALLED,         // out of arrival time without contact
-    JAW_SETTLED,     // empty is recorded, not a failure
+    JAW_SETTLED,
     LOOK_AGAIN,
     OUT_OF_LOOKS,
     PARK_AGAIN,

@@ -46,8 +46,6 @@ public:
             : arm_(arm), grid_(grid), hull_(hull), link_step_(link_step), blade_stride_(blade_stride) {}
 
     Verdict check(const Joints &q);
-    // The first verdict other than CLEAR on the straight joint-space line between a and b, ends excluded, sampled so no
-    // joint moves more than `step`; CLEAR if there is none.
     Verdict sweep(const Joints &a, const Joints &b, double step);
 
     const Arm &arm() const { return arm_; }
