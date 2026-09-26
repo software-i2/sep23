@@ -43,4 +43,7 @@ struct Plan {
 Plan planGrasp(const std::vector<GraspPose> &candidates, const Joints &start, Collision &collision, const PlanSettings &s,
                const std::function<bool()> &cancelled);
 
+// Seeds OMPL's random numbers, so a run can be repeated, and keeps its log to warnings.
+void seedPlanner(unsigned seed);
+
 }  // namespace sep23

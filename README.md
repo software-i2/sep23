@@ -31,7 +31,7 @@ Foxglove: `ws://localhost:8765`, display frame `world_locked`.
 - `/occluder/image`: the pick's raw camera, unlabelled on purpose (text would give the tracker corners to follow)
 - `/non_occluded/pointcloud`: what the camera still sees (the pick's cloud); `/occluded/pointcloud`: what the obstacle hides
 
-`loop.sh` prints one line per attempt; `on the handle` is the pass/fail for the blind motion.
+`loop.sh` prints one line per attempt.
 
 ## Config
 

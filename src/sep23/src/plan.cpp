@@ -4,6 +4,8 @@
 #include <ompl/base/spaces/RealVectorStateSpace.h>
 #include <ompl/geometric/SimpleSetup.h>
 #include <ompl/geometric/planners/rrt/RRTConnect.h>
+#include <ompl/util/Console.h>
+#include <ompl/util/RandomNumbers.h>
 
 #include <algorithm>
 #include <chrono>
@@ -168,6 +170,11 @@ Plan planGrasp(const std::vector<GraspPose> &candidates, const Joints &start, Co
         plan.summary += " " + std::to_string(t.second) + " " + t.first;
     }
     return plan;
+}
+
+void seedPlanner(unsigned seed) {
+    ompl::RNG::setSeed(static_cast<std::uint_fast32_t>(seed));
+    ompl::msg::setLogLevel(ompl::msg::LOG_WARN);
 }
 
 }  // namespace sep23

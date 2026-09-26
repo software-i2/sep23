@@ -1,35 +1,23 @@
 // Copyright by BeeX [2026]
+// Sanity: each part of the pick gives the right answer. Speed lives in runtime.cpp.
 #include <sep23/bpl.h>
 #include <sep23/follow.h>
 #include <sep23/fsm.h>
 #include <sep23/park.h>
 #include <sep23/track.h>
 
+#include "common.h"
+
 #include <gtest/gtest.h>
 #include <kdl/chainfksolverpos_recursive.hpp>
 #include <kdl_parser/kdl_parser.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include <cstdio>
-#include <memory>
 #include <random>
 
 using namespace sep23;
 
 namespace {
-
-const std::array<std::string, JOINT_COUNT> kNames = {"axis_e", "axis_d", "axis_c", "axis_b"};
-
-std::string expandedUrdf() {
-    const std::string command = "xacro " SEP23_DIR "/urdf/robot.urdf.xacro robot_yaml:=" SEP23_DIR "/config/robot.yaml";
-    std::unique_ptr<FILE, int (*)(FILE *)> pipe(popen(command.c_str(), "r"), pclose);
-    std::string                            out;
-    char                                   buffer[4096];
-    while (pipe && fgets(buffer, sizeof(buffer), pipe.get())) {
-        out += buffer;
-    }
-    return out;
-}
 
 // The shipped arm with no calibration offsets, so it can be compared with the URDF directly.
 ArmConfig testArm(const std::string &urdf) {
@@ -54,6 +42,7 @@ Joints randomJoints(const Arm &arm, std::mt19937 &rng) {
 
 }  // namespace
 
+// Key state transitions; START is ignored mid-pick but restarts from ESTOP.
 TEST(Fsm, WalksThePickAndLatchesStops) {
     EXPECT_EQ(nextState(State::READY, Event::START), State::STREAM);
     EXPECT_EQ(nextState(State::STREAM, Event::STREAMING), State::COLLECT);
@@ -66,6 +55,7 @@ TEST(Fsm, WalksThePickAndLatchesStops) {
     EXPECT_EQ(nextState(State::ESTOP, Event::START), State::STREAM);
 }
 
+// The follower reaches its goal, and flags a joint whose fresh readings stop moving.
 TEST(Follower, ReachesAndCatchesAStuckJoint) {
     FollowSettings s{rad(1.0), rad(0.5), 5.0, rad(0.2), 0.2, 3};
     PathFollower   f(s);
@@ -127,6 +117,7 @@ TEST(Follower, JointsArriveTogether) {
     }
 }
 
+// BPL packets survive encode/decode back to back, and a flipped bit is dropped.
 TEST(Bpl, FramesRoundTripAndRejectCorruption) {
     std::vector<uint8_t> stream = bpl::encode(5, bpl::POSITION, 1.5f);
     EXPECT_EQ(stream.back(), 0x00);
@@ -148,6 +139,7 @@ TEST(Bpl, FramesRoundTripAndRejectCorruption) {
     EXPECT_TRUE(reader.feed(broken.data(), broken.size()).empty());
 }
 
+// Our closed-form FK agrees with KDL on the URDF at 1000 random postures.
 TEST(Arm, ForwardKinematicsMatchesTheUrdf) {
     const std::string urdf = expandedUrdf();
     ASSERT_FALSE(urdf.empty());
@@ -201,6 +193,7 @@ TEST(Arm, InverseKinematicsRecoversEveryFrontFacingPosture) {
     EXPECT_GT(front, 200);
 }
 
+// Links and blades keep their clearances from obstacles; blades may touch only the handle's own cells.
 TEST(Collision, InflatesObstaclesAndKeepsHandleExact) {
     ObstacleMap map;
     map.box.voxel  = 0.01;
@@ -219,6 +212,7 @@ TEST(Collision, InflatesObstaclesAndKeepsHandleExact) {
     EXPECT_TRUE(grid.linkBlocked(handle + Eigen::Vector3d(0.02, 0, 0)));
 }
 
+// The reach map never rules out a point the IK can reach, so parking never skips a good spot.
 TEST(Park, ReachMapNeverRefusesWhatTheIkSolves) {
     const Arm      arm(testArm(expandedUrdf()), 0.005);
     const double   along = arm.mountDistance() + 0.06;
@@ -349,6 +343,7 @@ TEST(Track, FollowsTheMineThroughAnArmInsideTheGate) {
     EXPECT_TRUE(tracker.update(gray, points).covered);
 }
 
+// Grasp spots seen in enough frames are averaged; a single frame yields none.
 TEST(Cloud, ConsensusKeepsWhatFramesAgreeOn) {
     CloudSettings s;
     s.bar_gap = 0.015;

@@ -52,7 +52,7 @@ public:
 
     // Grey image and its organised cloud (one camera_link point per pixel, row-major).
     TrackResult update(const cv::Mat &gray, const std::vector<Eigen::Vector3f> &points);
-s
+
 private:
     cv::Mat              gateMask(const std::vector<Eigen::Vector3f> &points) const;
     std::vector<double>  depthsAt(const std::vector<cv::Point2f> &px, const std::vector<Eigen::Vector3f> &points) const;
