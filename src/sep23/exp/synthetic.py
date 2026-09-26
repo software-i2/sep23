@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""SYNTHETIC camera, not real data: one bag frame swaying rigidly along a known path in camera_link.
-Publishes /synthetic/image, pointcloud and grasp_poses. /synthetic/yaw_deg (read every frame) turns the scene about the
-camera's axis through the handle: the camera looks straight down, so that is the mine turned on the seabed."""
+"""synthetic data generator, making one bag frame drift in x y z"""
+"""becausue too few frames in bags"""
 import numpy as np
 
 
-def offset(t, amplitude, period, phases):
-    """Where the scene has swayed to at t s, camera_link metres from the bag frame: x right, y up, z towards the camera at half."""
-    periods = period * np.array([1.0, 1.3, 1.7])
-    return amplitude * np.array([1.0, 1.0, 0.5]) * np.sin(2 * np.pi * t / periods + phases)
+def offset(t, amplitude, period, params):
+    """A smooth, deterministic but non-repeating sway: one randomised sine pattern per run."""
+    base = np.array([1.0, 1.0, 0.5])
+    return amplitude * base * np.sin(2 * np.pi * t / (period * params["periods"]) + params["phases"]) * params["gain"]
 
 
 def place(points, yaw, pivot, shift):
@@ -51,14 +50,19 @@ def run():
     import rospy
     from occluder import xyz_view
 
-    rospy.init_node("synthetic_drift")
+    rospy.init_node("synthetic")
     from geometry_msgs.msg import Point, Pose, PoseArray, Quaternion
     from tf.transformations import quaternion_about_axis, quaternion_multiply
     from sensor_msgs.msg import Image, PointCloud2
 
-    k, rate_hz, period = 0, 10.0, 20.0  # bag frame, publish rate, sway period
+    k, rate_hz, period = 0, 10.0, 20.0  # bag frame, publish rate, base sway period
     amplitude = rospy.get_param("~amplitude_m", 0.02)
-    phases = np.random.default_rng(1).uniform(0, 2 * np.pi, 3)
+    rng = np.random.default_rng(1)
+    params = {
+        "periods": period * rng.uniform([0.8, 1.1, 1.4], [1.2, 1.7, 2.2], size=3),
+        "phases": rng.uniform(0.0, 2.0 * np.pi, size=3),
+        "gain": rng.uniform([0.8, 0.9, 0.6], [1.2, 1.1, 0.9], size=3),
+    }
     i = rospy.get_param("/robot/camera/intrinsics")
     camera = (i["height_px"], i["width_px"], i["fx_px"], i["fy_px"], i["cx_px"], i["cy_px"])
 
@@ -86,7 +90,7 @@ def run():
     pub_image = rospy.Publisher("/synthetic/image", Image, queue_size=2)
     pub_cloud = rospy.Publisher("/synthetic/pointcloud", PointCloud2, queue_size=2)
     pub_poses = rospy.Publisher("/synthetic/grasp_poses", PoseArray, queue_size=2)
-    rospy.logwarn("[synthetic] SYNTHETIC camera, not real data: bag frame %d swaying up to %.0f mm either side, period %.0f s, at %.0f Hz",
+    rospy.logwarn("[synthetic] fake camera, not real data: bag frame %d swaying up to %.0f mm either side, period %.0f s, at %.0f Hz",
                   k, 1000 * amplitude, period, rate_hz)
     start, rate, yaw_deg = rospy.get_time(), rospy.Rate(rate_hz), None
     while not rospy.is_shutdown():
@@ -96,7 +100,7 @@ def run():
             yaw_deg = turned
             rospy.logwarn("[synthetic] mine turned %+.0f deg", yaw_deg)
         yaw = np.radians(yaw_deg)
-        shift = offset(stamp.to_sec() - start, amplitude, period, phases)
+        shift = offset(stamp.to_sec() - start, amplitude, period, params)
         placed = place(points, yaw, pivot, shift)
         src = render(placed, nearest_first, camera)
         empty = src < 0
@@ -126,7 +130,7 @@ def run():
         pub_image.publish(out_image)
         pub_cloud.publish(out_cloud)
         pub_poses.publish(out_poses)
-        rospy.loginfo_throttle(5.0, "[synthetic] SYNTHETIC drift now %+.1f %+.1f %+.1f mm" % tuple(1000 * shift))
+        rospy.loginfo_throttle(5.0, "[synthetic] drift now %+.1f %+.1f %+.1f mm" % tuple(1000 * shift))
         rate.sleep()
 
 

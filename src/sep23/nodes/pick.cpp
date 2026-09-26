@@ -100,7 +100,7 @@ struct PickConfig {
     double                               stream_timeout_s = 0.0, spot_search_s = 0.0, repark_search_s = 0.0;
     int                                  retarget_attempts = 0, park_attempts = 0;
     double                               jaw_settle_tolerance = 0.0, jaw_settle_time_s = 0.0, jaw_grabbed_margin = 0.0, jaw_timeout_s = 0.0;
-    double                               catch_reach = 0.0, catch_off_centre = 0.0;
+    double                               catch_reach = 0.0, catch_off_centre = 0.0, close_within = 0.0, close_hold_s = 0.0;
 };
 
 Eigen::Isometry3d fromXyzRpy(const std::vector<double> &xyz, const std::vector<double> &rpy_deg) {
@@ -173,6 +173,8 @@ void loadPick(Params &robot, Params &pick, PickConfig &c) {
     c.jaw_timeout_s         = pick.number("jaw/timeout_s");
     c.catch_reach           = pick.number("jaw/catch_reach_m");
     c.catch_off_centre      = pick.number("jaw/catch_off_centre_m");
+    c.close_within          = pick.number("jaw/close_within_m");
+    c.close_hold_s          = pick.number("jaw/close_hold_s");
     pick.require(c.loop_hz > 0.0 && c.joint_state_timeout_s > 0.0, "loop_hz", "positive, with a positive joint_state_timeout_s");
     pick.require(c.retarget_attempts > 0 && c.park_attempts > 0, "task", "positive retarget_attempts and park_attempts");
     pick.require(c.jaw_timeout_s > c.jaw_settle_time_s, "jaw/timeout_s", "longer than jaw/settle_time_s");
@@ -806,6 +808,7 @@ private:
             return Event::FAILURE;
         }
         attempted_ = aimed_ = replanned_ = Eigen::Vector3d::Zero();
+        near_since_ = ros::Time();
         retargets_ = 0;
         steer_tries_.clear();
         message  = plan_.summary;
@@ -927,7 +930,20 @@ private:
         }
         if (stamp != last_stamp_) {
             last_stamp_ = stamp;
-            follower_.measure(arm_.toModel(reported));
+            const Joints          q     = arm_.toModel(reported);
+            follower_.measure(q);
+            const Eigen::Vector3d grasp = arm_.points(q).mount + arm_.axes(q).approach * c_.plan.grasp_point_from_mount;
+            const double          off   = (grasp - (scene_.candidates[plan_.candidate].point + aimed_)).norm();
+            if (off > c_.close_within) {
+                near_since_ = ros::Time();
+            } else if (near_since_.isZero()) {
+                near_since_ = stamp;
+            } else if ((stamp - near_since_).toSec() >= c_.close_hold_s) {
+                char line[120];
+                std::snprintf(line, sizeof(line), "held %.1f mm from the aimed target for %.1f s", 1000 * off, c_.close_hold_s);
+                message = line + motionReport(q);
+                return Event::REACHED;
+            }
         }
         Joints          target;
         bool            send  = false;
@@ -1205,7 +1221,7 @@ private:
     std::unique_ptr<ObstacleGrid> grid_;  // the grasp look's obstacles, inflated once; steering shifts it by a query offset
     VehiclePose       drive_from_, drive_to_;
     int               drive_steps_ = 1, drive_step_ = 0;
-    ros::Time         jaw_closed_at_, jaw_last_seen_, jaw_still_since_;
+    ros::Time         jaw_closed_at_, jaw_last_seen_, jaw_still_since_, near_since_;
     double            jaw_still_ = 0.0;
 };
 

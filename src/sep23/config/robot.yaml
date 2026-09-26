@@ -15,7 +15,7 @@ arm:
 
 jaws:
   limits_m: [0.0013, 0.0133]             # fully closed, fully open
-  open_m: 0.007                          # opening while moving; the collision body uses it too
+  open_m: 0.007                          
   mount_to_throat_m: 0.0300
   mount_to_tip_m: 0.0969
   palm_length_m: 0.00975
@@ -51,10 +51,10 @@ camera:
   intrinsics: {width_px: 800, height_px: 600, fx_px: 479.2662, fy_px: 479.2662, cx_px: 397.9827, cy_px: 322.8405}
 
 vehicle:
-  arm_mount_xyz_m: [0.35, 0.0, -0.05]    # UNMEASURED: arm_base in the vehicle frame
-  arm_mount_rpy_deg: [180.0, 0.0, 0.0]   # the arm hangs inverted, so arm_base +z points down
+  arm_mount_xyz_m: [0.35, 0.0, -0.05]    # arm_base in the vehicle frame
+  arm_mount_rpy_deg: [180.0, 0.0, 0.0]   
   hull_footprint_m: {min_x: -0.80, max_x: 0.10, min_y: -0.40, max_y: 0.40}  # in arm_base
-  hull_floor_z_m: -1.0e-6                # inside the footprint the hull is everything below this z in arm_base
+  hull_floor_z_m: -1.0e-6 
 
 driver:
   serial_port: /dev/ttyUSB0

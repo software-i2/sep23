@@ -27,6 +27,8 @@ foreach(node driver pick)
   add_dependencies(${node} ${PROJECT_NAME}_generate_messages_cpp)
 endforeach()
 
+catkin_install_python(PROGRAMS exp/synthetic.py exp/occluder.py DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
 if(CATKIN_ENABLE_TESTING)
   find_package(kdl_parser REQUIRED)
   catkin_add_gtest(${PROJECT_NAME}_test test/test_sep23.cpp)

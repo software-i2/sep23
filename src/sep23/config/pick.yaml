@@ -1,30 +1,30 @@
-# The pick. Loaded into /pick. Lengths m, angles deg, times s.
-
-loop_hz: 20.0                            # state machine, path following and vehicle stepping
-joint_state_timeout_s: 0.5               # older joint readings count as missing
+loop_hz: 20.0                            # for state machine
+joint_state_timeout_s: 0.5               # check for new joint state
 
 task:
-  stream_timeout_s: 10.0                 # no camera frame this long fails the pick
-  spot_search_s: 60.0                    # keep surveying this long while nothing is in view
-  repark_search_s: 120.0                 # give up reparking after this long without the vehicle moving
-  retarget_attempts: 10                  # looks from one parking spot
-  park_attempts: 3                       # parking spots actually driven to
+  stream_timeout_s: 10.0                 # initial check that camera is streaming
+  spot_search_s: 60.0                    # give up if no parking spot found
+  repark_search_s: 60.0                  # give up if stuck at same parking spot
+  retarget_attempts: 10                  # looks from one parking spot to find at least one grasp pose
+  park_attempts: 3                       # tries before calling it a failure
 
 jaw:
-  settle_tolerance_m: 0.0001
+  settle_tolerance_m: 0.0001              
   settle_time_s: 1.0
-  grabbed_margin_m: 0.0005               # settled this far short of closed means something is held
+  grabbed_margin_m: 0.005                # check that handle is actually grabbed
   timeout_s: 5.0
-  catch_reach_m: 0.070                   # pass: the handle ends no farther than this from the mount along the approach
-  catch_off_centre_m: 0.010              # and this close to the jaw's centre line; closing shoves it, so not dead centre
+  catch_reach_m: 0.070                   # params for testing 
+  catch_off_centre_m: 0.010              # params for testing
+  close_within_m: 0.005
+  close_hold_s: 2.0
 
 cloud:
-  frames: 5                              # frames per look when either averaging is on, otherwise 1
-  frame_timeout_s: 30.0
-  voxel_m: 0.0025
-  crop_margin_m: 1.0                     # kept beyond the arm's reach, for what a park move could bring in
-  approach_column: 0                     # grasp pose rotation column along the approach
-  bar_column: 1                          # and along the bar
+  frames: 5                              # frames for averaging
+  frame_timeout_s: 10.0                  # give up if no new frames arrive
+  voxel_m: 0.0025                        # 2.5mm voxels 
+  crop_margin_m: 1.0
+  approach_column: 0
+  bar_column: 1
   outlier_filter: true
   handle_carving: true
   corridor_carving: true
@@ -32,8 +32,8 @@ cloud:
   obstacle_averaging: true
   flying_pixel: {depth_tolerance_m: 0.003, min_agreeing_neighbours: 5, slope_window_px: 5}
   occupancy: {min_points_per_voxel: 2, free_space_tolerance_m: 0.005, max_surface_tilt_deg: 85.0}
-  handle_radius_m: 0.01                  # voxels this close to a grasp pose are handle, not obstacle
-  bar_gap_m: 0.015                       # consecutive poses closer than this lie on one bar
+  handle_radius_m: 0.01
+  bar_gap_m: 0.015
   corridor: {length_m: 0.05, radius_m: 0.01}
   consensus: {min_frames: 2, match_m: 0.010, max_axis_deg: 20.0, outlier_m: 0.006, max_spread_m: 0.003, duplicate_m: 0.005}
   vote: {min_frames: 2, radius_voxels: 1}
@@ -42,10 +42,10 @@ collision:
   link_radius_m: 0.020
   link_step_m: 0.002
   blade_step_m: 0.0025
-  grasp_point_from_mount_m: 0.050        # 0.040 is the throat, 0.0969 the tips
+  grasp_point_from_mount_m: 0.050        # smaller for deeper grasp
 
 park:
-  box_xy_m: 1.0
+  box_xy_m: 1.0                          # 1m x 1m x 0.5m box 
   box_z_m: 0.5
   box_yaw_deg: 45.0
   coarse_step_m: 0.100
@@ -56,7 +56,7 @@ park:
   standoff_m: [0.30, 0.40]               # a grasp only counts while the camera is this far from it
   screen_count: 3000                     # most poses screened against the obstacle map
   screen_budget_s: 10.0
-  screen_blade_stride: 20                # screening tests every nth blade sample; the winner is rechecked
+  screen_blade_stride: 20                # screening every nth blade sample for collision
   exact_count: 10                        # best drivable poses rechecked at full fidelity
   swing_band_deg: 5.0                    # poses this close to the least arm swing count as equal; more holds, then the shorter drive
   transit_samples: 16                    # points along the drive where the arm is checked
@@ -68,7 +68,7 @@ plan:
   start_tolerance_deg: 1.5               # a start this far past a limit is snapped onto it
   budget_s: 10.0
   goal_budget_s: 0.5                     # per grasp posture
-  range_deg: 57.2958                     # longest RRTConnect extension
+  range_deg: 57.2958                     # longest RRTConnect extension 1 rad max
   edge_step_deg: 1.0                     # collision check spacing along every edge
   seed: 1
 

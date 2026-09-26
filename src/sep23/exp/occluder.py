@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""Paints a textured obstacle into `image` while the pick is in GOTOGRASP and splits `cloud` by it.
-Publishes /occluder/image (the pick's camera), /non_occluded/pointcloud (what the camera still sees: the pick's cloud) and
-/occluded/pointcloud (what the obstacle hides). Both clouds stay organised, NaN where the other has a point.
-_cover:=100 is the most of the frame it covers, in percent."""
+"""introduce random occlusion to the camera view and the point cloud"""
 import copy
-
 import numpy as np
 
-SWEEP_S = 8.0  # time to ramp up to full cover
+SWEEP_S = 10.0  # time to ramp up to full cover
 
 
 def roll(rng):
-    """One switch-on's dice: the side the obstacle comes from and how it wanders. Waves are (amplitude, Hz, phase)."""
+    """the side the obstacle comes from and how it wanders. Waves are (amplitude, Hz, phase)."""
     terms = lambda n, amp, freq: [(rng.uniform(*amp), rng.uniform(*freq), rng.uniform(0, 2 * np.pi)) for _ in range(n)]
     return {"angle": rng.uniform(0.0, 360.0), "pace": rng.uniform(0.6, 1.4), "sway": terms(3, (0.02, 0.08), (0.2, 2.5)),
             "drift": terms(2, (10, 45), (0.05, 0.3)), "edge": terms(2, (0.01, 0.05), (0.5, 3))}
@@ -22,7 +18,7 @@ def waves(terms, x):
 
 
 def coverage(cover, t, dice):
-    """Fraction of the frame covered t s after switch-on: ramps up to `cover`, then holds, wobbling."""
+    """Fraction of the frame covered t s after switch-on, with a random pace and sway. The sweep is linear, the sway is sinusoidal."""
     return cover * float(np.clip(min(t / (SWEEP_S * dice["pace"]), 1.0) + waves(dice["sway"], t), 0.0, 1.0))
 
 

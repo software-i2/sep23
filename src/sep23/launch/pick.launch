@@ -38,7 +38,7 @@
     <arg name="bag_topics" value="$(eval '--topics /disparity /image /pointcloud' if vision else '')"/>
     <node if="$(eval bag != '' and not synthetic)" name="bag" pkg="rosbag" type="play" args="--loop --quiet --rate=$(arg bag_rate) $(arg bag) $(arg bag_topics)"/>
 
-    <node if="$(arg synthetic)" name="synthetic_drift" pkg="sep23" type="synthetic_drift.py" output="screen" required="true">
+    <node if="$(arg synthetic)" name="synthetic" pkg="sep23" type="synthetic.py" output="screen" required="true">
         <param name="bag" value="$(arg bag)"/>
         <param name="amplitude_m" value="$(arg amplitude_m)"/>
     </node>
